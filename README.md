@@ -27,7 +27,7 @@ Run the test suite:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                    # 97 tests
+python -m pytest -q                    # 93 tests
 ```
 
 ---
@@ -673,7 +673,7 @@ noted future refinement rather than building modality-specific label text now.
 
 ## Tests
 
-97 tests, clearly delineated by purpose:
+93 tests, clearly delineated by purpose:
 
 | Type | Location | Covers |
 |---|---|---|
