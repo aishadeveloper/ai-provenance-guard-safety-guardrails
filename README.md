@@ -27,7 +27,7 @@ Run the test suite:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                    # 70 tests
+python -m pytest -q                    # 84 tests
 ```
 
 ---
@@ -51,7 +51,7 @@ POST /submit  {text, creator_id}
         │                                                         │
         ├─────────────────────────► audit log (SQLite, append-only)
         ▼
-   response {content_id, attribution, confidence, label, signals}
+   response {content_id, attribution, confidence, label, signals, provenance}
 
 POST /appeal {content_id, creator_reasoning}
         └─► append appeal row (status: under_review) ─► audit log ─► confirmation
@@ -77,6 +77,7 @@ SQLite audit log, and the response returns to the platform. Separately, `/appeal
 | Transparency labels | [`provenance/labels.py`](provenance/labels.py) |
 | Audit log (SQLite) | [`provenance/audit.py`](provenance/audit.py) |
 | Analytics aggregation | [`provenance/analytics.py`](provenance/analytics.py) |
+| Provenance certificates | [`provenance/certificates.py`](provenance/certificates.py) |
 | Pipeline orchestration | [`provenance/pipeline.py`](provenance/pipeline.py) |
 | Flask app + routes | [`provenance/app.py`](provenance/app.py) |
 
@@ -84,8 +85,10 @@ SQLite audit log, and the response returns to the platform. Separately, `/appeal
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `POST /submit` | `{text, creator_id}` | `{content_id, attribution, confidence, label, signals}` |
+| `POST /submit` | `{text, creator_id}` | `{content_id, attribution, confidence, label, signals, provenance}` |
 | `POST /appeal` | `{content_id, creator_reasoning}` | `{content_id, status, message}` |
+| `POST /verify` | `{creator_id, samples[], pledge_accepted}` | the `Verified Human Creator` certificate |
+| `GET /certificate` | `?creator_id=…` | stored certificate (404 if not verified) |
 | `GET /log` | — | `{entries: [...]}` recent audit entries |
 | `GET /analytics` | — | dashboard metrics aggregated from the audit log |
 
@@ -478,6 +481,70 @@ returns zeros / `null` rather than dividing by zero.
 
 ---
 
+## Provenance certificate (stretch feature)
+
+A **"Verified Human Creator"** credential a creator earns through a verification
+step, displayed on their content and distinguishable from the standard transparency
+label.
+
+**What it asserts — and deliberately doesn't.** This is a credential of
+*provenance and accountability*, **not** a claim that an algorithm proved humanity.
+It means: an accountable, named creator has registered a personal writing baseline
+and pledged that their submissions are their own original work. We **deliberately do
+not** gate the credential on passing the AI detector, because (a) we explicitly call
+that detector an unreliable signal, and (b) a detector gate would deny the credential
+to exactly the formal / non-native human writers most prone to false positives — the
+people the system exists to protect. Gating a *human* credential on a tool we tell
+users not to over-trust would be self-contradictory.
+
+**The verification step (`POST /verify`).** The creator submits their `creator_id`,
+**≥ 3 writing samples of ≥ 20 words each**, and `pledge_accepted: true` (the explicit
+authorship pledge). *Why multiple samples:* one piece can't establish a stable
+baseline — stylometry needs several samples to capture a writer's natural variation.
+The system computes the mean stylometric fingerprint across the samples, stores it as
+the creator's baseline (`verified_creators` table), and returns the certificate:
+
+```json
+// POST /verify  {creator_id, samples:[…3+…], pledge_accepted:true}
+{
+  "creator_id": "writer-aisha",
+  "credential": "Verified Human Creator",
+  "samples_enrolled": 3,
+  "baseline": { "function_words": 0.5112, "punctuation": 0.8965, "burstiness": 0.5 },
+  "statement": "This creator has registered an authorship baseline and attests that this is their own original work.",
+  "verified_at": "2026-06-30T02:38:00Z"
+}
+```
+
+`GET /certificate?creator_id=…` returns the stored credential (404 if not verified).
+
+**The verified label, distinguishable from the transparency label.** The two
+describe different things and coexist: the transparency label is about *this text's*
+AI-likelihood; the certificate is about *the creator*. A verified creator's `/submit`
+response carries a separate `provenance` block; an unverified creator's does not:
+
+```json
+// verified creator's /submit                    // unverified creator's /submit
+"provenance": {                                   "provenance": {
+  "verified_human_creator": true,                   "verified_human_creator": false
+  "badge": "✓ Verified Human Creator",            }
+  "statement": "…attests … original work.",
+  "baseline_consistency": 0.7963
+}
+```
+
+**Decoupled from the detector — by design.** In the live run above, that verified
+submission scored **`uncertain` (confidence 0.427)** from the AI detector, yet the
+creator **keeps their ✓ badge** (baseline_consistency 0.80). The credential travels
+with the accountable creator; the transparency label still honestly reports what the
+detector thinks of the specific text. The two never override each other.
+
+**`baseline_consistency`** scores how well a submission's fingerprint matches the
+creator's enrolled baseline (`1 − mean|baseline − this|`) — an honest "matches your
+established style" signal, a genuinely different question from "is this AI?".
+
+---
+
 ## Known limitations
 
 1. **Formal / academic human writing (a false positive — the costly direction).**
@@ -545,7 +612,7 @@ returns zeros / `null` rather than dividing by zero.
 
 ## Tests
 
-70 tests, clearly delineated by purpose:
+84 tests, clearly delineated by purpose:
 
 | Type | Location | Covers |
 |---|---|---|

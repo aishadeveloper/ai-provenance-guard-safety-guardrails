@@ -465,7 +465,59 @@ view," and keeps it testable). Computed over the audit log:
 
 **Verification:** unit tests on `summarize` (counts, ratios, appeal rate, empty
 log); an integration test that `GET /analytics` reflects real submissions + an
-appeal. README documents the metrics with a real sample response.
+appeal. README documents the metrics with a real sample response. **DONE.**
+
+### Provenance certificate — IN PROGRESS
+
+**Goal:** a "verified human" credential a creator earns through a verification step,
+displayed on their content and distinguishable from the standard transparency label.
+
+**What the certificate asserts (the key design decision).** A certificate of
+*provenance/accountability*, **not** a claim that an algorithm proved humanity. It
+means: an accountable, named creator has registered a personal writing baseline and
+pledged that their submissions are their own original work. We deliberately do
+**not** gate the credential on passing the AI detector, because (a) we explicitly
+call that detector an unreliable signal, and (b) a detector gate would deny the
+credential to exactly the formal / non-native human writers most prone to false
+positives — the people the system exists to protect. (See README "Provenance
+certificate" for this rationale; it is also a good AI-usage / design-reflection item.)
+
+**Verification step (`POST /verify`).** The creator submits:
+- `creator_id`,
+- `samples`: **≥ 3** writing samples, each **≥ 20 words** (one sample can't establish
+  a stable baseline; stylometry needs several samples to capture a writer's natural
+  variation), and
+- `pledge_accepted: true` (an explicit authorship pledge — the accountability step).
+
+The system reuses `stylometry.stylometric_members` on each sample and stores the
+**mean fingerprint** (function_words / punctuation / burstiness) as the creator's
+baseline, marks `creator_id` verified, and returns the certificate. Stored in a
+`verified_creators` table (creator_id PK, verified_at, samples_count, baseline).
+
+**Verified label, distinguishable from the transparency label.** The two describe
+different things and coexist: the transparency label is about *this text's*
+AI-likelihood; the certificate is about *the creator*. A verified creator's
+`/submit` response carries a separate `provenance` block, e.g.
+`{ "verified_human_creator": true, "badge": "✓ Verified Human Creator",
+"statement": "…registered an authorship baseline and attests original work",
+"baseline_consistency": 0.0–1.0 }`. Unverified creators get
+`{ "verified_human_creator": false }`. `GET /certificate?creator_id=…` returns the
+stored credential.
+
+**Baseline consistency (uses the baseline, not just stores it).** Each submission
+from a verified creator is scored for how well its stylometric fingerprint matches
+their enrolled baseline (`1 − mean|baseline − this|`), surfaced as
+`baseline_consistency` — an honest "matches your established style" signal, distinct
+from the generic AI check.
+
+**Edge cases:** < 3 samples or any sample < 20 words → 400; pledge not accepted →
+400; re-enrolling updates the baseline. Verification is a creator-level event, kept
+in its own table (not the content audit log, whose rows are per-content decisions).
+
+**Verification:** unit tests (enroll validates sample count/length/pledge, baseline
+is the mean, consistency math, is_verified); integration (`/verify` earns the badge;
+a verified vs unverified `/submit` differ; `/certificate` lookup; 400s). README
+shows a real `/verify` response and a verified-vs-standard `/submit` contrast.
 
 ---
 

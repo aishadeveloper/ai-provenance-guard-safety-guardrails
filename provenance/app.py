@@ -18,7 +18,7 @@ from flask import Flask, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from provenance import analytics, audit
+from provenance import analytics, audit, certificates
 from provenance.config import DEFAULT_DB_PATH, SUBMIT_RATE_LIMITS
 from provenance.pipeline import classify
 
@@ -38,6 +38,7 @@ def create_app(
     db_path = db_path or os.environ.get("PROVENANCE_DB", DEFAULT_DB_PATH)
     app.config["PROVENANCE_DB"] = db_path
     audit.init_db(db_path)
+    certificates.init_db(db_path)
 
     # Rate limiting (planning.md): /submit is an expensive LLM-backed write, so it
     # sits in the strict tier. Keyed per client IP via in-memory storage.
@@ -69,6 +70,20 @@ def create_app(
         result = classify(text, llm_client=llm_client)
         content_id = str(uuid.uuid4())
 
+        # Provenance certificate (stretch): a verified creator's content carries a
+        # distinct credential badge, separate from the text's transparency label.
+        cert = certificates.get_certificate(db_path, creator_id)
+        if cert:
+            members = {k: result["signals"][k] for k in ("function_words", "punctuation", "burstiness")}
+            provenance = {
+                "verified_human_creator": True,
+                "badge": "✓ Verified Human Creator",
+                "statement": cert["statement"],
+                "baseline_consistency": certificates.baseline_consistency(cert["baseline"], members),
+            }
+        else:
+            provenance = {"verified_human_creator": False}
+
         audit.log_classification(
             db_path,
             content_id=content_id,
@@ -88,6 +103,7 @@ def create_app(
                     "confidence": round(result["confidence"], 4),
                     "label": result["label"],
                     "signals": result["signals"],  # per-member ensemble breakdown
+                    "provenance": provenance,       # verified-creator credential
                 }
             ),
             200,
@@ -126,6 +142,30 @@ def create_app(
             ),
             200,
         )
+
+    @app.post("/verify")
+    def verify():
+        body = request.get_json(silent=True) or {}
+        try:
+            certificate = certificates.enroll(
+                db_path,
+                body.get("creator_id"),
+                body.get("samples"),
+                pledge_accepted=bool(body.get("pledge_accepted", False)),
+            )
+        except certificates.EnrollmentError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(certificate), 200
+
+    @app.get("/certificate")
+    def get_cert():
+        creator_id = request.args.get("creator_id", type=str)
+        if not creator_id:
+            return jsonify({"error": "Query param 'creator_id' is required."}), 400
+        cert = certificates.get_certificate(db_path, creator_id)
+        if cert is None:
+            return jsonify({"verified_human_creator": False, "creator_id": creator_id}), 404
+        return jsonify(cert), 200
 
     @app.get("/log")
     def get_log():
