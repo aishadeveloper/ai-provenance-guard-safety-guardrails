@@ -27,7 +27,7 @@ Run the test suite:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                    # 64 tests
+python -m pytest -q                    # 70 tests
 ```
 
 ---
@@ -39,11 +39,11 @@ POST /submit  {text, creator_id}
         │
         ├─► Signal 1: LLM classification (Groq llama-3.3-70b)   ──┐  semantic
         │        raw text ─► ai_likelihood 0–1                    │
-        ├─► Signal 2: stylometry (pure Python)                  ──┤  structural
-        │        raw text ─► ai_likelihood 0–1                    │
+        ├─► Signal 2: stylometry — 3 members (pure Python)      ──┤  structural
+        │        raw text ─► 3 sub-scores 0–1                     │
         │                                                         ▼
-        │                                 scoring.combine() ─► confidence 0–1
-        │                                  (weighted blend + disagreement pull)
+        │                          scoring.combine_ensemble() ─► confidence 0–1
+        │                           (4-member weighted ensemble + conflict pull)
         │                                                         │
         │                                  labels.classify_label()│
         │                                                         ▼
@@ -51,19 +51,20 @@ POST /submit  {text, creator_id}
         │                                                         │
         ├─────────────────────────► audit log (SQLite, append-only)
         ▼
-   response {content_id, attribution, confidence, label}
+   response {content_id, attribution, confidence, label, signals}
 
 POST /appeal {content_id, creator_reasoning}
         └─► append appeal row (status: under_review) ─► audit log ─► confirmation
 ```
 
-A creator submits text to `/submit`. The raw text is sent to **both** signals
-independently; each returns a 0–1 "how AI-like" score. `scoring.combine()`
-normalizes them onto one calibrated `confidence`, then `labels.classify_label()`
-maps that score to one of three attribution bands and its reader-facing label. The
-full decision — both signal scores, the combined confidence, the attribution, a
-text snippet, IDs and timestamp — is written to an append-only SQLite audit log,
-and the response returns to the platform. Separately, `/appeal` takes a
+A creator submits text to `/submit`. The raw text is sent to all signals
+independently — the LLM plus stylometry's three structural members — each returning
+a 0–1 "how AI-like" score. `scoring.combine_ensemble()` blends them into one
+calibrated `confidence` (weighted average + conflict pull), then
+`labels.classify_label()` maps that score to one of three attribution bands and its
+reader-facing label. The full decision — the signal scores, the combined confidence,
+the attribution, a text snippet, IDs and timestamp — is written to an append-only
+SQLite audit log, and the response returns to the platform. Separately, `/appeal` takes a
 `content_id`, appends an appeal record (flipping the content's current status to
 `under_review`) **next to** the original decision, and confirms receipt.
 
@@ -75,6 +76,7 @@ and the response returns to the platform. Separately, `/appeal` takes a
 | Confidence scoring | [`provenance/scoring.py`](provenance/scoring.py) |
 | Transparency labels | [`provenance/labels.py`](provenance/labels.py) |
 | Audit log (SQLite) | [`provenance/audit.py`](provenance/audit.py) |
+| Analytics aggregation | [`provenance/analytics.py`](provenance/analytics.py) |
 | Pipeline orchestration | [`provenance/pipeline.py`](provenance/pipeline.py) |
 | Flask app + routes | [`provenance/app.py`](provenance/app.py) |
 
@@ -85,6 +87,7 @@ and the response returns to the platform. Separately, `/appeal` takes a
 | `POST /submit` | `{text, creator_id}` | `{content_id, attribution, confidence, label, signals}` |
 | `POST /appeal` | `{content_id, creator_reasoning}` | `{content_id, status, message}` |
 | `GET /log` | — | `{entries: [...]}` recent audit entries |
+| `GET /analytics` | — | dashboard metrics aggregated from the audit log |
 
 ---
 
@@ -438,6 +441,43 @@ ensemble members; the per-member breakdown is returned by `/submit` under `signa
 
 ---
 
+## Analytics dashboard (stretch feature)
+
+`GET /analytics` returns a dashboard summary aggregated from the audit log — no new
+data capture, just aggregation, so it always reflects real activity. It surfaces the
+three required metric families plus extras:
+
+1. **Detection pattern** — the attribution distribution and the **AI-vs-human
+   verdict ratio**.
+2. **Appeal rate** — appeals ÷ classifications.
+3. **Extra** — average confidence and the **uncertain rate** (how often the system
+   honestly declines to call it — a fitting health metric for an uncertainty-first
+   design).
+
+Live sample (5 submissions — 2 AI, 2 human, 1 uncertain — and 1 appeal):
+
+```json
+// GET /analytics
+{
+  "total_submissions": 5,
+  "total_appeals": 1,
+  "detection_pattern": {
+    "likely_ai": 2, "likely_human": 2, "uncertain": 1,
+    "ai_vs_human_ratio": 1.0,
+    "percent_ai": 40.0, "percent_human": 40.0, "percent_uncertain": 20.0
+  },
+  "appeal_rate": 0.2,
+  "average_confidence": 0.515,
+  "uncertain_rate": 0.2
+}
+```
+
+Aggregation lives in a pure, unit-tested function
+([`provenance/analytics.py`](provenance/analytics.py) → `summarize`); an empty log
+returns zeros / `null` rather than dividing by zero.
+
+---
+
 ## Known limitations
 
 1. **Formal / academic human writing (a false positive — the costly direction).**
@@ -505,7 +545,7 @@ ensemble members; the per-member breakdown is returned by `/submit` under `signa
 
 ## Tests
 
-64 tests, clearly delineated by purpose:
+70 tests, clearly delineated by purpose:
 
 | Type | Location | Covers |
 |---|---|---|

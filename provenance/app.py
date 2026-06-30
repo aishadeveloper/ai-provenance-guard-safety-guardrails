@@ -18,7 +18,7 @@ from flask import Flask, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from provenance import audit
+from provenance import analytics, audit
 from provenance.config import DEFAULT_DB_PATH, SUBMIT_RATE_LIMITS
 from provenance.pipeline import classify
 
@@ -131,6 +131,11 @@ def create_app(
     def get_log():
         limit = request.args.get("limit", default=50, type=int)
         return jsonify({"entries": audit.get_recent(db_path, limit=limit)}), 200
+
+    @app.get("/analytics")
+    def get_analytics():
+        # Aggregate dashboard metrics over the audit log (stretch feature).
+        return jsonify(analytics.compute(db_path)), 200
 
     @app.errorhandler(429)
     def ratelimit_handler(exc):

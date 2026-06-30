@@ -438,7 +438,34 @@ both planning.md and README updated together (see README "Ensemble detection").
 split → uncertain, near-0.5 members don't manufacture conflict, weights respected);
 the `/submit` response now exposes a per-member `signals` breakdown so all four
 votes are visible; re-ran live calibration to confirm all three bands stay
-reachable.
+reachable. **DONE.**
+
+### Analytics dashboard — IN PROGRESS
+
+**Goal:** a view showing at least 3 metrics — a detection pattern (ratio of AI vs
+human verdicts), the appeal rate, and one additional metric.
+
+**Approach.** Everything needed is already in the append-only audit log, so this is
+pure aggregation — no new data capture. A `GET /analytics` endpoint returns a
+structured JSON summary (the "view"; a JSON endpoint satisfies "source shows a
+view," and keeps it testable). Computed over the audit log:
+
+- **Detection pattern:** counts of each attribution (`likely_ai`, `likely_human`,
+  `uncertain`) across classifications, plus the **AI-vs-human verdict ratio** and
+  the percentage breakdown.
+- **Appeal rate:** appeals ÷ classifications (the fraction of decisions contested).
+- **Additional metrics:** average confidence across classifications, and the
+  **uncertain rate** (how often the system honestly declines to call it — a
+  meaningful health metric given this system's "honest uncertainty" stance).
+
+**Definitions/edge cases.** Each submission writes exactly one classification row
+(unique `content_id`); each appeal is one row. Empty log → all metrics return 0 /
+`null` rather than dividing by zero. Aggregation lives in a pure function
+(`analytics.summarize(entries)`) so it is unit-testable without a database.
+
+**Verification:** unit tests on `summarize` (counts, ratios, appeal rate, empty
+log); an integration test that `GET /analytics` reflects real submissions + an
+appeal. README documents the metrics with a real sample response.
 
 ---
 

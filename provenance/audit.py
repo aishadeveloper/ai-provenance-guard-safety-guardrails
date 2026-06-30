@@ -136,6 +136,13 @@ def get_recent(db_path: str, limit: int = 50) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def get_all(db_path: str) -> list[dict[str, Any]]:
+    """Return every entry (oldest first) — used by analytics aggregation."""
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT * FROM audit_log ORDER BY id ASC").fetchall()
+    return [dict(row) for row in rows]
+
+
 def latest_for_content(db_path: str, content_id: str) -> Optional[dict[str, Any]]:
     """Most recent row for a content_id, or None if it was never classified.
 
