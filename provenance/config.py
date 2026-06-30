@@ -31,6 +31,13 @@ DISAGREEMENT_PULL = 0.6
 # --- Groq (Signal 1) --------------------------------------------------------
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
+# Cap the text sent to the LLM signal. Signal 2 (stylometry) still analyzes the
+# FULL text — only the Groq input is truncated. This bounds input tokens per
+# /submit so a long document can't blow Groq's per-minute token limit (12,000
+# tokens/min on the free tier as of 2026-06-29; limits may change — see the Groq
+# console). ~1,200 words is roughly ~1,500 tokens, comfortably within one window.
+LLM_MAX_INPUT_WORDS = 1200
+
 # --- Stylometry (Signal 2) --------------------------------------------------
 # A fixed, curated list of common English function words used as the Burrows's
 # Delta basis. Kept on the lower end (~40) because the platform sees short

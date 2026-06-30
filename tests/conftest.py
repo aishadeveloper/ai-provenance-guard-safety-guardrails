@@ -25,11 +25,13 @@ class FakeGroqClient:
                  raise_exc: Exception | None = None):
         self._content = content
         self._raise = raise_exc
+        self.last_kwargs = None  # records the args of the most recent create() call
         # the client exposes .chat.completions.create — point both at self
         self.chat = self
         self.completions = self
 
     def create(self, **kwargs):
+        self.last_kwargs = kwargs
         if self._raise is not None:
             raise self._raise
         message = SimpleNamespace(content=self._content)

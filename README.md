@@ -285,6 +285,36 @@ cumulative behavior.)*
 
 ---
 
+## Groq API usage & limits
+
+Only **Signal 1** calls Groq — exactly one request per `/submit`. Signal 2
+(stylometry) is pure Python, and `/appeal` and `/log` never call Groq.
+
+Groq's free tier limits both **requests** and **tokens**, per minute and per day.
+For `llama-3.3-70b-versatile`, the binding limits are:
+
+| Limit | Value | Notes |
+|---|---|---|
+| Requests / minute | ~30 | Our own limiter (10/min) is stricter, so this is rarely the constraint |
+| Tokens / minute | 12,000 | **The constraint that matters for long documents** |
+
+> **⚠️ These limits are as of 2026-06-29 and may change.** Groq adjusts free-tier
+> quotas over time — check your current values in the [Groq console](https://console.groq.com)
+> (Dashboard → Metrics, "Show Limits") rather than relying on the figures above.
+
+**Why the token limit matters, and the safeguard.** Because the whole submission
+is sent to the model as input tokens, a long document costs far more than a short
+poem. At our max request rate (10/min), staying under 12,000 tokens/min leaves a
+budget of ~1,200 tokens (~900 words) per submission. To prevent a long document
+from exceeding the per-minute token limit, the LLM signal **truncates its input to
+the first `LLM_MAX_INPUT_WORDS` words** (default **1,200**, set in
+[`provenance/config.py`](provenance/config.py)) — **stylometry still analyzes the
+full text**, so only the semantic signal sees the capped version. If a Groq limit
+is hit anyway, `llm_signal` degrades gracefully to a neutral `0.5` (the submission
+still succeeds; that verdict then leans on stylometry alone).
+
+---
+
 ## Audit log
 
 Every attribution decision and every appeal is written to a structured,

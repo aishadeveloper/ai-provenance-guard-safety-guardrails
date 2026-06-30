@@ -66,3 +66,21 @@ def test_no_client_and_no_api_key_returns_neutral(monkeypatch):
     result = llm_signal("t", client=None)
     assert result["ai_likelihood"] == 0.5
     assert result["error"] == "no_api_key"
+
+
+def test_long_input_is_truncated_before_sending_to_groq():
+    """Bounds Groq input tokens: only the first LLM_MAX_INPUT_WORDS words are sent."""
+    from provenance.config import LLM_MAX_INPUT_WORDS
+
+    long_text = " ".join(["word"] * (LLM_MAX_INPUT_WORDS + 500))
+    client = FakeGroqClient('{"verdict": "ai", "ai_likelihood": 0.6, "reasoning": "x"}')
+    llm_signal(long_text, client=client)
+
+    sent = client.last_kwargs["messages"][1]["content"]  # the user message
+    assert len(sent.split()) == LLM_MAX_INPUT_WORDS
+
+
+def test_short_input_is_sent_unchanged():
+    client = FakeGroqClient('{"verdict": "human", "ai_likelihood": 0.2, "reasoning": "x"}')
+    llm_signal("just a few words here", client=client)
+    assert client.last_kwargs["messages"][1]["content"] == "just a few words here"

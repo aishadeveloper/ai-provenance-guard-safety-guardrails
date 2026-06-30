@@ -19,7 +19,7 @@ import json
 import os
 from typing import Any, Optional
 
-from provenance.config import GROQ_MODEL
+from provenance.config import GROQ_MODEL, LLM_MAX_INPUT_WORDS
 
 SYSTEM_PROMPT = (
     "You are a forensic text analyst. Assess whether the user's text was "
@@ -69,6 +69,19 @@ def _coerce(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _truncate_words(text: str, max_words: int) -> str:
+    """Return the first ``max_words`` words of ``text`` (whole text if shorter).
+
+    Used to bound the input tokens sent to Groq per call so a long document can't
+    exceed the per-minute token limit. Only the LLM signal is capped — stylometry
+    still sees the full text.
+    """
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words])
+
+
 def _build_client() -> Optional[Any]:
     """Construct a real Groq client from the environment, or None if no key."""
     api_key = os.environ.get("GROQ_API_KEY")
@@ -93,12 +106,13 @@ def llm_signal(text: str, *, client: Optional[Any] = None) -> dict[str, Any]:
             error="no_api_key",
         )
 
+    prompt_text = _truncate_words(text, LLM_MAX_INPUT_WORDS)
     try:
         response = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text},
+                {"role": "user", "content": prompt_text},
             ],
             temperature=0.0,  # low temp for stability across identical inputs
             response_format={"type": "json_object"},
