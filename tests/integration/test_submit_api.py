@@ -23,6 +23,16 @@ def test_submit_returns_full_contract(client):
     assert isinstance(data["label"], str) and data["label"]
 
 
+def test_submit_exposes_ensemble_signal_breakdown(client):
+    """The response surfaces the per-member ensemble scores (>=3 signals)."""
+    resp = client.post("/submit", json={"text": "a poem about the sea and the sky", "creator_id": "u1"})
+    signals = resp.get_json()["signals"]
+    assert "llm" in signals
+    assert len(signals) >= 3  # ensemble requirement: 3+ detection signals
+    for name, score in signals.items():
+        assert 0.0 <= score <= 1.0
+
+
 def test_submit_persists_to_audit_log(client):
     resp = client.post("/submit", json={"text": "hello there world", "creator_id": "u1"})
     content_id = resp.get_json()["content_id"]

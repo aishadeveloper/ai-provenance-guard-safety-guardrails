@@ -10,9 +10,41 @@ honesty property the project asks for. (planning.md "Confidence scoring".)
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 from provenance.config import DISAGREEMENT_PULL, W_LLM, W_STYLO
+
+
+def combine_ensemble(
+    members: Sequence[tuple[float, float]],
+    *,
+    pull: float = DISAGREEMENT_PULL,
+) -> float:
+    """Combine N weighted detector scores into one AI-likelihood, clamped to [0, 1].
+
+    ``members`` is a sequence of ``(score, weight)`` pairs (each score is a 0–1
+    AI-likelihood). The result is the weighted mean pulled toward 0.5 in proportion
+    to how much the members' evidence **cancels**:
+
+      net   = |Σ wᵢ·(sᵢ − 0.5)|     (how strongly they agree on a direction)
+      gross = Σ wᵢ·|sᵢ − 0.5|        (total evidence, regardless of direction)
+      conflict = 1 − net/gross       (0 = all lean the same way, 1 = evidence cancels)
+
+    A member near 0.5 has small ``|sᵢ − 0.5|``, so it neither manufactures nor masks
+    conflict. This is the N-member generalization of the 2-signal disagreement pull.
+    """
+    active = [(s, w) for s, w in members if w > 0]
+    total_w = sum(w for _, w in active)
+    if total_w == 0:
+        return 0.5
+
+    mean = sum(s * w for s, w in active) / total_w
+    net = abs(sum((s - 0.5) * w for s, w in active)) / total_w
+    gross = sum(abs(s - 0.5) * w for s, w in active) / total_w
+    conflict = 0.0 if gross == 0 else 1.0 - (net / gross)
+
+    pulled = mean + (0.5 - mean) * conflict * pull
+    return max(0.0, min(1.0, pulled))
 
 
 def combine(
@@ -31,19 +63,7 @@ def combine(
     if stylometric_score is None:
         return max(0.0, min(1.0, llm_score))
 
-    total_w = w_llm + w_stylo
-    blended = (w_llm * llm_score + w_stylo * stylometric_score) / total_w
-
-    # Pull toward 0.5 only on *genuine* conflict: the signals must sit on
-    # opposite sides of 0.5 (one says AI, the other says human). A merely
-    # non-committal signal near 0.5 is not a conflict and must not drag a
-    # confident signal down. Conflict strength is set by the *weaker* signal's
-    # distance from 0.5 (scaled to 0..1) — a barely-leaning opposite signal
-    # pulls little; two strongly-opposed signals pull hard.
-    d_llm = llm_score - 0.5
-    d_stylo = stylometric_score - 0.5
-    if d_llm * d_stylo < 0:  # opposite sides of 0.5
-        conflict = min(abs(d_llm), abs(d_stylo)) * 2.0
-        blended = blended + (0.5 - blended) * conflict * pull
-
-    return max(0.0, min(1.0, blended))
+    # The 2-signal blend is the special case of the N-member ensemble rule.
+    return combine_ensemble(
+        [(llm_score, w_llm), (stylometric_score, w_stylo)], pull=pull
+    )

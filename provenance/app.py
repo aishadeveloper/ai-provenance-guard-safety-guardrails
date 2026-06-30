@@ -87,6 +87,7 @@ def create_app(
                     "attribution": result["attribution"],
                     "confidence": round(result["confidence"], 4),
                     "label": result["label"],
+                    "signals": result["signals"],  # per-member ensemble breakdown
                 }
             ),
             200,

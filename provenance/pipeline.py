@@ -9,38 +9,46 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import statistics
+
 from provenance import labels, scoring
+from provenance.config import ENSEMBLE_WEIGHTS
 from provenance.signals.llm import llm_signal
-from provenance.signals.stylometry import stylometric_signal
+from provenance.signals.stylometry import stylometric_members
 
 
 def classify(text: str, *, llm_client: Optional[Any] = None) -> dict[str, Any]:
     """Run the full detection pipeline on ``text`` and return a decision dict.
 
-    Keys: ``llm_score`` (signal 1), ``stylometric_score`` (signal 2),
-    ``confidence`` (blended), ``attribution``, ``label``, plus diagnostics
-    (``verdict``, ``llm_reasoning``, ``llm_error``, ``stylometric_detail``).
+    Keys: ``llm_score`` (semantic member), ``stylometric_score`` (equal-weight mean
+    of the structural members, kept for the audit log), ``confidence`` (the 4-member
+    weighted ensemble), ``signals`` (per-member 0–1 scores), ``attribution``,
+    ``label``, plus diagnostics (``verdict``, ``llm_reasoning``, ``llm_error``).
 
-    Both signals run on the raw text; ``scoring.combine`` blends them with a
-    disagreement pull toward uncertainty; the blended score selects the label.
+    The ensemble members are the LLM plus the three stylometric properties, each
+    independently weighted (config.ENSEMBLE_WEIGHTS) and combined by
+    ``scoring.combine_ensemble`` with a conflict-scaled pull toward uncertainty.
     """
     llm = llm_signal(text, client=llm_client)
     llm_score = llm["ai_likelihood"]
 
-    stylo = stylometric_signal(text)
-    stylometric_score = stylo["ai_likelihood"]
+    stylo = stylometric_members(text)  # function_words, punctuation, burstiness
+    stylometric_score = statistics.fmean(stylo.values())  # aggregate for the log
 
-    confidence = scoring.combine(llm_score, stylometric_score)
+    members = {"llm": llm_score, **stylo}
+    confidence = scoring.combine_ensemble(
+        [(score, ENSEMBLE_WEIGHTS[name]) for name, score in members.items()]
+    )
 
     attribution, label = labels.classify_label(confidence)
     return {
         "llm_score": llm_score,
         "stylometric_score": stylometric_score,
         "confidence": confidence,
+        "signals": {name: round(score, 4) for name, score in members.items()},
         "attribution": attribution,
         "label": label,
         "verdict": llm["verdict"],
         "llm_reasoning": llm["reasoning"],
         "llm_error": llm["error"],
-        "stylometric_detail": stylo["detail"],
     }

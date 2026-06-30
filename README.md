@@ -27,7 +27,7 @@ Run the test suite:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                    # 50 tests
+python -m pytest -q                    # 64 tests
 ```
 
 ---
@@ -82,7 +82,7 @@ and the response returns to the platform. Separately, `/appeal` takes a
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `POST /submit` | `{text, creator_id}` | `{content_id, attribution, confidence, label}` |
+| `POST /submit` | `{text, creator_id}` | `{content_id, attribution, confidence, label, signals}` |
 | `POST /appeal` | `{content_id, creator_reasoning}` | `{content_id, status, message}` |
 | `GET /log` | — | `{entries: [...]}` recent audit entries |
 
@@ -90,9 +90,12 @@ and the response returns to the platform. Separately, `/appeal` takes a
 
 ## Detection signals
 
-The system uses **two genuinely independent signals** — one semantic, one
-structural. They fail in different situations, so the combination is more
+The system combines a **semantic** signal (the LLM) and a **structural** signal
+(stylometry). They fail in different situations, so the combination is more
 informative than either alone, and a confident verdict requires them to *agree*.
+Stylometry itself measures three distinct properties; the *Ensemble detection*
+stretch feature (below) promotes those three to independently-weighted members, so
+the live system is a **4-member weighted ensemble** (LLM + 3 stylometric properties).
 
 ### Signal 1 — LLM classification (Groq), the *semantic* signal
 
@@ -111,8 +114,10 @@ informative than either alone, and a confident verdict requires them to *agree*.
 ### Signal 2 — stylometric heuristics (pure Python), the *structural* signal
 
 Three metrics, each capturing a **distinct** property so they aren't redundant.
-Each is reduced to a 0–1 "how AI-like" sub-score; the signal score is their
-equal-weight mean.
+Each is reduced to a 0–1 "how AI-like" sub-score. These three are the structural
+**ensemble members** (each independently weighted — see *Ensemble detection*); the
+equal-weight mean of them is retained only as the aggregate `stylometric_score`
+recorded in the audit log.
 
 1. **Function-word profile (Burrows's Delta).** The per-text rate of ~40 common
    function words (the, of, and, to, …) is standardized (z-scored against a
@@ -143,18 +148,19 @@ equal-weight mean.
 
 ## Confidence scoring
 
-One score, `confidence` ∈ [0, 1] (0 = clearly human, 1 = clearly AI). Both signals
-already report on this scale, so blending is a **weighted average (0.60 LLM / 0.40
-stylometry) plus a disagreement pull**:
+One score, `confidence` ∈ [0, 1] (0 = clearly human, 1 = clearly AI). Every ensemble
+member already reports on this scale, so the combination is a **weighted average of
+the four members plus a conflict pull** (see *Ensemble detection* for the per-member
+weights and the math):
 
-- The LLM is the more holistic judge but uncalibrated; stylometry is deterministic
-  but weak on short text. Hence the slight lean toward the LLM.
-- **Disagreement pull:** when the two signals sit on **opposite sides of 0.5** (one
-  says AI, the other says human), the blended score is pulled toward 0.5
-  (uncertain), scaled by the *weaker* signal's distance from 0.5. A merely
-  non-committal signal near 0.5 is **not** treated as conflict and won't drag a
-  confident signal down. The upshot: **a confident verdict requires the two
-  independent signals to agree** — the system's core honesty property.
+- The LLM is the most informative member (weight 0.55) but uncalibrated; the
+  structural members are deterministic but weaker on short text.
+- **Conflict pull:** the weighted mean is pulled toward 0.5 (uncertain) in
+  proportion to how much the members' evidence **cancels** (`1 − net/gross`). When
+  the members all lean the same way, nothing is pulled; when they split, the result
+  is pulled into the uncertain band. A member near 0.5 carries little evidence, so
+  it neither manufactures nor masks conflict. The upshot: **a confident verdict
+  requires the members to agree** — the system's core honesty property.
 
 What specific scores mean to a reader (`provenance/config.py`):
 
@@ -176,24 +182,81 @@ signal and checked that scores spread the way intuition says they should — and
 all three bands are reachable. Two example submissions with noticeably different
 confidence (lifted directly from that run):
 
-| Example | `confidence` | attribution | LLM (s1) | stylometry (s2) |
-|---|---|---|---|---|
-| **High** — AI-style listicle ("Maintaining a healthy work-life balance…") | **0.823** | `likely_ai` | 0.80 | 0.86 |
-| **Low** — casual human review ("ok so i finally tried that ramen place…") | **0.119** | `likely_human` | 0.10 | 0.15 |
+| Example | `confidence` | attribution | ensemble members (llm / function_words / punctuation / burstiness) |
+|---|---|---|---|
+| **High** — AI-style listicle ("Maintaining a healthy work-life balance…") | **0.805** | `likely_ai` | 0.80 / 0.57 / 1.00 / 1.00 |
+| **Low** — casual human review ("ok so i finally tried that ramen place…") | **0.144** | `likely_human` | 0.10 / 0.45 / 0.00 / 0.00 |
 
 A third case is the most instructive. The spec's "clearly AI" essay ("Artificial
-intelligence represents a transformative paradigm shift…") scores **0.639 →
-`uncertain`**: the LLM is confident it's AI (0.80) but stylometry can't corroborate
-on a single short paragraph (0.43), so the system **honestly hedges instead of
-accusing**. When a *longer* AI text gives stylometry enough to work with (the
-listicle above), the two signals agree and the score jumps to 0.823 `likely_ai`.
-That contrast — same "obviously AI to a human" intuition, different honest outputs
-depending on how much evidence the structural signal actually has — is the system
-working as designed, not a bug.
+intelligence represents a transformative paradigm shift…") scores **0.617 →
+`uncertain`**: the LLM is confident it's AI (0.80) but the structural members can't
+corroborate on a single short paragraph (function_words 0.55, punctuation 0.36,
+burstiness 0.38), so the members split and the system **honestly hedges instead of
+accusing**. When a *longer* AI text gives the structural members enough to work with
+(the listicle above — punctuation and burstiness both hit 1.00), they agree with the
+LLM and the score rises to 0.805 `likely_ai`. That contrast — same "obviously AI to
+a human" intuition, different honest outputs depending on how much evidence the
+structural members actually have — is the system working as designed, not a bug.
 
 The calibration ordering is also pinned as a **regression test**
 ([`tests/regression/test_calibration.py`](tests/regression/test_calibration.py)) so
 a future change can't silently re-order clearly-human vs clearly-AI text.
+
+---
+
+## Ensemble detection (stretch feature)
+
+The detector is a **4-member weighted ensemble** — three or more signals combined
+by a documented weighting scheme. The members are the LLM plus the three stylometric
+properties, each promoted to a first-class, independently-weighted member (they
+measure genuinely distinct properties, so this is a real ensemble, not relabeling):
+
+| Member | Property measured | Weight | Why this weight |
+|---|---|---|---|
+| `llm` | holistic semantic/stylistic coherence | **0.55** | the single most informative signal |
+| `function_words` | unconscious word-choice habits (Burrows's Delta) | **0.20** | strongest *classical* stylometric signal |
+| `burstiness` | sentence-length variance | **0.15** | a named pillar of AI-text detection |
+| `punctuation` | punctuation density | **0.10** | a softer structural cue |
+
+Weights live in `config.ENSEMBLE_WEIGHTS` and sum to 1.0.
+
+**The weighting/voting rule** (`scoring.combine_ensemble`): the weighted mean of the
+members, pulled toward 0.5 in proportion to how much their evidence cancels —
+
+```
+net      = | Σ wᵢ·(sᵢ − 0.5) |     # how strongly the members agree on a direction
+gross    =   Σ wᵢ·|sᵢ − 0.5|        # total evidence regardless of direction
+conflict = 1 − net/gross            # 0 = all lean the same way, 1 = evidence cancels
+confidence = mean + (0.5 − mean) · conflict · 0.6
+```
+
+This generalizes the original 2-signal disagreement pull to N members. When all
+members lean the same way `net == gross`, conflict is 0, and a confident verdict
+stands; when they split, the evidence cancels and the result is pulled to uncertain.
+A member near 0.5 contributes little `|sᵢ − 0.5|`, so it can't manufacture or mask
+conflict. (The 2-signal `combine()` is preserved as the special case of this rule.)
+
+**Visible in the output.** Every `/submit` response includes the per-member
+breakdown, so all four votes are inspectable:
+
+```json
+// POST /submit  (the AI-style listicle)
+{
+  "content_id": "50f9474c-…",
+  "attribution": "likely_ai",
+  "confidence": 0.8048,
+  "label": "Likely AI-generated. …",
+  "signals": { "llm": 0.8, "function_words": 0.574, "punctuation": 1.0, "burstiness": 1.0 }
+}
+```
+
+How the ensemble changed the calibration vs the base 2-signal blend (same texts,
+live Groq): the high/low cases stayed firmly in their bands (0.823→0.805,
+0.119→0.144) and the short AI essay still honestly hedges (0.639→0.617 uncertain) —
+because three structural members splitting against a confident LLM expresses the
+"not enough corroboration" state more faithfully than one bundled stylometry score
+did. Structural invariants (≥3 members, weights sum to 1) are pinned by
+[`tests/regression/test_ensemble.py`](tests/regression/test_ensemble.py).
 
 ---
 
@@ -332,44 +395,46 @@ entry carries an `attribution`, `confidence`, and `timestamp`):
 {
   "entries": [
     {
-      "id": 4, "event_type": "appeal", "content_id": "50f9474c-1a43-4e5b-98a7-e8cbc850258a",
-      "creator_id": "creator-bob", "attribution": "likely_ai", "confidence": 0.8232017394202322,
+      "id": 4, "event_type": "appeal", "content_id": "04d01c18-4b72-4bd4-8a4a-52c315de8712",
+      "creator_id": "creator-bob", "attribution": "likely_ai", "confidence": 0.8048026091303485,
       "llm_score": 0.8, "stylometric_score": 0.8580043485505807, "status": "under_review",
       "appeal_reasoning": "I wrote this myself from personal experience. English is my second language so my style may read more formal than typical.",
-      "text_snippet": "Maintaining a healthy work-life balance is essential for bot…",
-      "timestamp": "2026-06-30T02:08:15Z"
+      "text_snippet": "Maintaining a healthy work-life balance is essential fo…",
+      "timestamp": "2026-06-30T02:19:57Z"
     },
     {
-      "id": 3, "event_type": "classification", "content_id": "d14b8107-6462-4db8-b40b-d5c9f0809c0f",
-      "creator_id": "creator-carol", "attribution": "uncertain", "confidence": 0.6393002413298108,
+      "id": 3, "event_type": "classification", "content_id": "1c2cfd1f-3a29-4b1f-944e-96bd3866267f",
+      "creator_id": "creator-carol", "attribution": "uncertain", "confidence": 0.6165253878526704,
       "llm_score": 0.8, "stylometric_score": 0.4301243329257401, "status": "classified",
       "appeal_reasoning": null,
-      "text_snippet": "Artificial intelligence represents a transformative paradigm…",
-      "timestamp": "2026-06-30T02:08:15Z"
+      "text_snippet": "Artificial intelligence represents a transformative par…",
+      "timestamp": "2026-06-30T02:19:57Z"
     },
     {
-      "id": 2, "event_type": "classification", "content_id": "50f9474c-1a43-4e5b-98a7-e8cbc850258a",
-      "creator_id": "creator-bob", "attribution": "likely_ai", "confidence": 0.8232017394202322,
-      "llm_score": 0.8, "stylometric_score": 0.8580043485505807, "status": "classified",
-      "appeal_reasoning": null,
-      "text_snippet": "Maintaining a healthy work-life balance is essential for bot…",
-      "timestamp": "2026-06-30T02:08:14Z"
-    },
-    {
-      "id": 1, "event_type": "classification", "content_id": "e4dee72d-13c7-4412-af55-21df3bf248d9",
-      "creator_id": "creator-aisha", "attribution": "likely_human", "confidence": 0.11934114632372422,
+      "id": 2, "event_type": "classification", "content_id": "bbde07f2-d5a9-4cae-945c-0bd0557265a1",
+      "creator_id": "creator-aisha", "attribution": "likely_human", "confidence": 0.14401171948558633,
       "llm_score": 0.1, "stylometric_score": 0.14835286580931056, "status": "classified",
       "appeal_reasoning": null,
-      "text_snippet": "ok so i finally tried that new ramen place downtown and hone…",
-      "timestamp": "2026-06-30T02:08:13Z"
+      "text_snippet": "ok so i finally tried that new ramen place downtown and…",
+      "timestamp": "2026-06-30T02:19:56Z"
+    },
+    {
+      "id": 1, "event_type": "classification", "content_id": "04d01c18-4b72-4bd4-8a4a-52c315de8712",
+      "creator_id": "creator-bob", "attribution": "likely_ai", "confidence": 0.8048026091303485,
+      "llm_score": 0.8, "stylometric_score": 0.8580043485505807, "status": "classified",
+      "appeal_reasoning": null,
+      "text_snippet": "Maintaining a healthy work-life balance is essential fo…",
+      "timestamp": "2026-06-30T02:19:56Z"
     }
   ]
 }
 ```
 
-Note rows 2 and 4 share `content_id` `50f9474c-…`: the original `classified`
-decision (row 2) is preserved and the `under_review` appeal (row 4) sits beside
+Note rows 1 and 4 share `content_id` `04d01c18-…`: the original `classified`
+decision (row 1) is preserved and the `under_review` appeal (row 4) sits beside
 it — the append-only log showing the appeal alongside the original classification.
+(`stylometric_score` here is the equal-weight aggregate of the three structural
+ensemble members; the per-member breakdown is returned by `/submit` under `signals`.)
 
 ---
 
@@ -380,8 +445,8 @@ it — the append-only log showing the appeal alongside the original classificat
    and consistent punctuation. Signal 2's core assumption — "uniform structure =
    AI" — misfires here, and Signal 1 also tends to over-flag formal register. In the
    live calibration, the formal-human monetary-policy passage scored higher on
-   stylometry (0.30) than the casual human review (0.18) — drifting toward AI
-   precisely for the kind of writer the platform most wants to protect. The wide
+   stylometry (aggregate 0.30) than the casual human review (0.15) — drifting toward
+   AI precisely for the kind of writer the platform most wants to protect. The wide
    uncertain band and the asymmetric 0.70 AI threshold are the mitigations, but this
    is the system's most important failure mode.
 2. **AI text lightly edited by a human (a false negative).** Varying a few sentence
@@ -410,8 +475,9 @@ it — the append-only log showing the appeal alongside the original classificat
   being treated as a strong disagreement. I diverged to a **cross-0.5 conflict**
   formulation: the pull fires only when the signals are on opposite sides of 0.5 and
   is scaled by the *weaker* signal's distance from 0.5. After the change, agreeing
-  signals reach `likely_ai` (the listicle, 0.823) while genuine conflict still lands
-  `uncertain`.
+  signals reach `likely_ai` (the listicle, 0.805) while genuine conflict still lands
+  `uncertain`. (The *Ensemble detection* stretch feature later generalized this same
+  conflict pull from two signals to four via the `net/gross` evidence ratio.)
 
 ---
 
@@ -439,13 +505,13 @@ it — the append-only log showing the appeal alongside the original classificat
 
 ## Tests
 
-50 tests, clearly delineated by purpose:
+64 tests, clearly delineated by purpose:
 
 | Type | Location | Covers |
 |---|---|---|
-| **Unit** | [`tests/unit/`](tests/unit/) | LLM parsing & graceful fallbacks; append-only audit log; stylometry metrics & ordering; scoring blend & disagreement pull — each module in isolation, no network |
-| **Integration** | [`tests/integration/`](tests/integration/) | `/submit`, `/appeal`, `/log` over the Flask app with a temp DB and a stubbed Groq client — the HTTP contract and persistence |
-| **Regression** | [`tests/regression/`](tests/regression/) | stylometry calibration ordering on the spec's labelled texts; exact label wording & band boundaries; rate-limit 429 behavior — guards against silent drift |
+| **Unit** | [`tests/unit/`](tests/unit/) | LLM parsing & graceful fallbacks & input cap; append-only audit log; stylometry metrics & ordering; scoring blend, disagreement pull & the N-member ensemble combiner — each module in isolation, no network |
+| **Integration** | [`tests/integration/`](tests/integration/) | `/submit` (incl. the ensemble `signals` breakdown), `/appeal`, `/log` over the Flask app with a temp DB and a stubbed Groq client — the HTTP contract and persistence |
+| **Regression** | [`tests/regression/`](tests/regression/) | stylometry calibration ordering on the spec's labelled texts; exact label wording & band boundaries; rate-limit 429 behavior; ensemble invariants (≥3 members, weights sum to 1) — guards against silent drift |
 
 The Groq client is dependency-injected, so unit/integration tests run fully offline
 with a deterministic stub; live Groq is used only for manual calibration checks.

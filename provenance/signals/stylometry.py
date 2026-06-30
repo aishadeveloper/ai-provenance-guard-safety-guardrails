@@ -168,32 +168,41 @@ def _delta_subscore(text: str, ref: ReferenceModel) -> float:
     return d_human / (d_human + d_ai)  # closer to AI profile -> higher
 
 
-def stylometric_signal(text: str, *, reference: Optional[ReferenceModel] = None) -> dict[str, Any]:
-    """Return ``{ai_likelihood, detail}`` for the stylometry signal.
+def stylometric_members(text: str, *, reference: Optional[ReferenceModel] = None) -> dict[str, float]:
+    """Return the three stylometric sub-scores as raw 0–1 AI-likelihoods.
 
-    ``ai_likelihood`` is the equal-weight mean of the three sub-scores. On text
-    too short to measure reliably, sub-scores fall back to 0.5 (uncertain) rather
-    than producing a confident-but-meaningless number.
+    Keys: ``function_words``, ``punctuation``, ``burstiness``. On text too short to
+    measure reliably (or a single sentence for burstiness), the affected sub-score
+    falls back to 0.5 (uncertain) rather than fabricating a confident value. These
+    are the first-class members consumed by the ensemble (planning.md "Ensemble
+    detection").
     """
     ref = reference or default_reference()
-    words = _words(text)
 
-    if len(words) < _MIN_WORDS:
-        detail = {"function_words": _NEUTRAL, "punctuation": _NEUTRAL, "burstiness": _NEUTRAL,
-                  "note": f"text shorter than {_MIN_WORDS} words; stylometry unreliable"}
-        return {"ai_likelihood": _NEUTRAL, "detail": detail}
-
-    fw = _delta_subscore(text, ref)
-    punct = _interp(_punctuation_density(text), ref.punct_human, ref.punct_ai)
+    if len(_words(text)) < _MIN_WORDS:
+        return {"function_words": _NEUTRAL, "punctuation": _NEUTRAL, "burstiness": _NEUTRAL}
 
     burst_raw = _burstiness(text)
-    if burst_raw is None:
-        burst = _NEUTRAL  # single sentence: can't measure variance
-    else:
-        # high variance = human, low = AI, so AI-likeness rises as variance falls
-        burst = _interp(burst_raw, ref.burst_human, ref.burst_ai)
+    return {
+        "function_words": _delta_subscore(text, ref),
+        "punctuation": _interp(_punctuation_density(text), ref.punct_human, ref.punct_ai),
+        # high variance = human, low = AI; single sentence -> can't measure -> 0.5
+        "burstiness": _NEUTRAL if burst_raw is None
+        else _interp(burst_raw, ref.burst_human, ref.burst_ai),
+    }
 
-    combined = statistics.fmean([fw, punct, burst])
-    detail = {"function_words": round(fw, 4), "punctuation": round(punct, 4),
-              "burstiness": round(burst, 4)}
+
+def stylometric_signal(text: str, *, reference: Optional[ReferenceModel] = None) -> dict[str, Any]:
+    """Return ``{ai_likelihood, detail}`` for the stylometry signal as a whole.
+
+    ``ai_likelihood`` is the equal-weight mean of the three sub-scores — retained
+    for the audit log's aggregate ``stylometric_score`` and the calibration
+    regression test. The ensemble consumes the sub-scores individually via
+    ``stylometric_members``.
+    """
+    members = stylometric_members(text, reference=reference)
+    combined = statistics.fmean(members.values())
+    detail = {k: round(v, 4) for k, v in members.items()}
+    if len(_words(text)) < _MIN_WORDS:
+        detail["note"] = f"text shorter than {_MIN_WORDS} words; stylometry unreliable"
     return {"ai_likelihood": combined, "detail": detail}

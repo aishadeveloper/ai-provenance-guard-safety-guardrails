@@ -23,10 +23,22 @@ LIKELY_AI_MIN = 0.70
 W_LLM = 0.60
 W_STYLO = 0.40
 
-# When the two signals disagree, pull the blended score toward 0.5 (uncertain)
-# rather than reporting a confident-looking average. 0 = ignore disagreement,
-# 1 = a fully-disagreeing pair lands exactly on 0.5.
+# When signals disagree, pull the blended score toward 0.5 (uncertain) rather than
+# reporting a confident-looking average. 0 = ignore disagreement, 1 = fully-
+# cancelling evidence lands exactly on 0.5. Used by both the 2-signal blend and the
+# N-member ensemble.
 DISAGREEMENT_PULL = 0.6
+
+# --- Ensemble detection (stretch feature) -----------------------------------
+# A 4-member weighted ensemble: the LLM plus the three (previously bundled)
+# stylometric properties, each now an independently-weighted member. Weights sum
+# to 1.0. See planning.md "Ensemble detection" for the rationale per member.
+ENSEMBLE_WEIGHTS = {
+    "llm": 0.55,            # most informative single signal
+    "function_words": 0.20,  # strongest classical stylometric signal (Burrows's Delta)
+    "burstiness": 0.15,      # a named pillar of AI-text detection
+    "punctuation": 0.10,     # a softer structural cue
+}
 
 # --- Groq (Signal 1) --------------------------------------------------------
 GROQ_MODEL = "llama-3.3-70b-versatile"

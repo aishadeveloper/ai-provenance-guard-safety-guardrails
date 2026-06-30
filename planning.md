@@ -188,6 +188,11 @@ score lands in exactly one.
   [`tests/regression/test_calibration.py`](tests/regression/test_calibration.py).
   Constants were chosen for behavior across the spread, not fitted to a few examples.
 
+> **Note:** the figures above are the **base two-signal blend** as of M4. The
+> *Ensemble detection* stretch feature (below) replaces this combination with a
+> 4-member weighted ensemble; the current calibration numbers live in the README.
+> The 2-signal `combine()` remains as a special case of the ensemble rule.
+
 ---
 
 ## Transparency labels
@@ -386,6 +391,55 @@ flowchart TD
 | Rate limiting | `Flask-Limiter` | Free |
 | Audit log | SQLite (built-in) or structured JSON | No additional setup |
 ---
+---
+
+## Stretch features
+
+*(Per the spec, planning is updated **before** starting each stretch feature.)*
+
+### Ensemble detection (3+ signals, weighted) — IN PROGRESS
+
+**Goal:** incorporate 3 or more detection signals with a documented weighting or
+voting approach.
+
+**Approach — promote the structural sub-metrics to first-class members.** The base
+system blends 2 top-level signals, but Signal 2 already computes **three genuinely
+distinct** stylometric properties (function words, punctuation, burstiness) and
+averages them internally. The ensemble promotes those three to **independently-
+weighted ensemble members** alongside the LLM, giving a documented **4-member
+weighted ensemble** (no relabeling — each member is separately weighted and the
+aggregation is genuinely different from the old equal-weight average inside Signal 2):
+
+| Member | Property it measures | Weight | Rationale |
+| --- | --- | --- | --- |
+| `llm` | holistic semantic/stylistic coherence | **0.55** | the single most informative signal |
+| `function_words` | unconscious word-choice habits (Burrows's Delta) | **0.20** | strongest *classical* stylometric signal |
+| `burstiness` | sentence-length variance | **0.15** | a named pillar of AI-text detection |
+| `punctuation` | punctuation density | **0.10** | a softer structural cue |
+
+Weights sum to 1.0 and are documented constants in `config.ENSEMBLE_WEIGHTS`.
+
+**Aggregation + uncertainty (the voting rule).** Weighted average of the four
+member scores, then the **N-member generalization of our disagreement pull**:
+measure how much the members' evidence *cancels* — `net = |Σ wᵢ·(sᵢ−0.5)|`,
+`gross = Σ wᵢ·|sᵢ−0.5|`, `conflict = 1 − net/gross` — and pull the weighted mean
+toward 0.5 by `conflict · DISAGREEMENT_PULL`. When all members lean the same way,
+`net == gross`, conflict is 0, and a confident verdict stands; when they split, the
+evidence cancels, conflict → 1, and the result is pulled into the uncertain band. A
+member sitting near 0.5 has small `|sᵢ−0.5|`, so it neither creates nor masks
+conflict — the same honesty property as the 2-signal pull, now across four voters.
+The 2-signal `combine()` is preserved as the special case of this same rule.
+
+**Thresholds/labels unchanged** (0.40 / 0.70). **Edge cases unchanged.** Only the
+score *combination* changes, so the calibration numbers were **regenerated** and
+both planning.md and README updated together (see README "Ensemble detection").
+
+**Verification:** unit tests for the ensemble combiner (all-agree → confident,
+split → uncertain, near-0.5 members don't manufacture conflict, weights respected);
+the `/submit` response now exposes a per-member `signals` breakdown so all four
+votes are visible; re-ran live calibration to confirm all three bands stay
+reachable.
+
 ---
 
 ## AI tool plan (Milestones 3–5)
