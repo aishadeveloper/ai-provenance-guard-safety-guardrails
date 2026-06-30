@@ -100,9 +100,14 @@ habits, structural rhythm) so they aren't redundant — directly satisfying the
    sub-score via `d_human / (d_human + d_ai)` — `0` = closer to human, `1` = closer to
    AI, `0.5` = equidistant ("can't tell"). This sub-score is one of three stylometric
    metrics; it feeds the signal-2 score, which then blends with signal 1.
-   **[YOUR CALL] at build time (M4):** where the reference statistics come from —
-   published human rates + generated AI samples, or small human/AI text sets you
-   average. Rough references are fine if documented.
+   **RESOLVED (M4):** the reference statistics come from **small bundled corpora**
+   committed to the repo at [`fixtures/human/`](fixtures/human) and
+   [`fixtures/ai/`](fixtures/ai) (5 known-human + 5 known-AI short samples). At
+   startup these build the Delta standardization basis (per-word mean + spread) and
+   the human/AI reference profiles; the model is cached after first use. Chosen over
+   hardcoded constants because committed corpora are reproducible and inspectable.
+   See `build_reference()` / `default_reference()` in
+   [`provenance/signals/stylometry.py`](provenance/signals/stylometry.py).
    *(Grounding: this is the Burrows's-Delta / most-frequent-word approach, validated
    for AI detection at >80% accuracy even on ~100-word excerpts, with accuracy
    sensitive to text length and feature count.)*
@@ -159,12 +164,29 @@ Mapping raw outputs → one calibrated score (the folding recipe):
 positive is the costliest error. Bands are contiguous (no gaps, no overlaps): every
 score lands in exactly one.
 
-**[YOUR CALL] at build time (M4):** the normalization mappings, the signal weights,
-and what to do when the two signals strongly disagree (recommended: pull toward the
-uncertain band rather than averaging to a confident-looking middle). Calibrate on a
-real spread of known-human and known-AI texts — do *not* fit the constants to a
-handful of examples (overfitting) — and state how you tested that scores are
-meaningful.
+**RESOLVED (M4)** — see [`provenance/scoring.py`](provenance/scoring.py) and
+[`provenance/config.py`](provenance/config.py):
+
+- **Normalization:** both signals already report on the same 0–1 "how AI-like"
+  scale, so no cross-scale mapping is needed. Signal 1 returns `ai_likelihood`
+  directly; Signal 2's three metrics are each mapped to 0–1 (function words via the
+  Delta ratio `d_human/(d_human+d_ai)`; punctuation and burstiness via linear
+  interpolation between the human-mean and AI-mean **anchors** computed from the
+  bundled corpora) and averaged.
+- **Weights:** `W_LLM = 0.60`, `W_STYLO = 0.40` — a slight lean toward the LLM
+  (more holistic) over the deterministic-but-weaker-on-short-text stylometry.
+- **Disagreement handling:** the blended score is pulled toward 0.5 **only on
+  genuine cross-0.5 conflict** (the two signals on opposite sides of 0.5), scaled by
+  the *weaker* signal's distance from 0.5 (`DISAGREEMENT_PULL = 0.6`). A merely
+  non-committal signal near 0.5 is **not** treated as conflict. This diverged from
+  the original sketch (raw `|s1 − s2|`), which over-penalized an "I can't tell"
+  stylometry score — see the README "Spec reflection".
+- **Calibration / how it was tested:** validated against the spec's labelled texts
+  with the **live** Groq signal, checking the score spread and that all three bands
+  are reachable (high-AI listicle `0.823`, casual human `0.119`, the short AI essay
+  honestly hedging at `0.639` uncertain). The ordering is pinned by
+  [`tests/regression/test_calibration.py`](tests/regression/test_calibration.py).
+  Constants were chosen for behavior across the spread, not fitted to a few examples.
 
 ---
 
@@ -197,8 +219,11 @@ Exact display text:
 
 Wording principles: no hard authorship claim ("likely"/"signs of", never "this was
 written by AI"); every label admits fallibility; the AI label names the appeal path;
-the uncertain label explains *why*. **[YOUR CALL]** Rewrite in your voice and
-user-test on someone who hasn't seen the project.
+the uncertain label explains *why*. **RESOLVED (M5):** the three strings above are
+the final wording, implemented verbatim in
+[`provenance/labels.py`](provenance/labels.py) and pinned by
+[`tests/regression/test_labels.py`](tests/regression/test_labels.py) so they can't
+drift; the README reproduces them verbatim.
 
 ---
 
@@ -408,3 +433,19 @@ generate, and how I'll verify the output before using it.
   I reframed it for human-vs-AI as "AI uses function words at more uniform rates than
   an individual human's idiosyncratic pattern" rather than accepting "it's just the
   strongest signal."
+
+**Instance 2 — the confidence-scoring blend and its disagreement pull (M4).**
+
+- *What I directed:* I asked the AI to implement `scoring.combine()` — the weighted
+  blend of the two signals plus the disagreement pull toward the uncertain band —
+  following this document's sketch.
+- *What it produced:* a working blend with a pull of the form
+  `blended + (0.5 − blended) · |s1 − s2| · k`, using the raw gap between the signals.
+- *What I decided / revised / overrode:* live calibration against Groq (which I ran)
+  showed the clearly-AI essay (LLM `0.80`, stylometry `0.43`) being pulled down to
+  `0.62` → *uncertain*, because a stylometry score of `0.43` — really "I can't tell"
+  — was being treated as a strong disagreement. **I diagnosed the cause and revised**
+  the pull to fire only on **genuine cross-0.5 conflict** (signals on opposite sides
+  of 0.5), scaled by the *weaker* signal's distance from 0.5. After the change,
+  agreeing signals reach `likely_ai` (the listicle, `0.823`) while genuine conflict
+  still lands `uncertain` — and I re-validated all three bands against live Groq.
