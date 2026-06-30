@@ -21,6 +21,7 @@ from flask_limiter.util import get_remote_address
 
 from provenance import analytics, audit, certificates
 from provenance.config import DEFAULT_DB_PATH, SUBMIT_RATE_LIMITS
+from provenance.db import Database
 from provenance.pipeline import classify, classify_metadata
 
 
@@ -38,8 +39,11 @@ def create_app(
 
     db_path = db_path or os.environ.get("PROVENANCE_DB", DEFAULT_DB_PATH)
     app.config["PROVENANCE_DB"] = db_path
-    audit.init_db(db_path)
-    certificates.init_db(db_path)
+    # One Database owns connection handling for the whole app; data-access modules
+    # receive it rather than each opening their own connection.
+    db = Database(db_path)
+    audit.init_db(db)
+    certificates.init_db(db)
 
     # Rate limiting (planning.md): /submit is an expensive LLM-backed write, so it
     # sits in the strict tier. Keyed per client IP via in-memory storage.
@@ -89,7 +93,7 @@ def create_app(
 
         # Provenance certificate (stretch): a verified creator's content carries a
         # distinct credential badge, separate from the content's transparency label.
-        cert = certificates.get_certificate(db_path, creator_id)
+        cert = certificates.get_certificate(db, creator_id)
         if cert:
             provenance = {
                 "verified_human_creator": True,
@@ -104,7 +108,7 @@ def create_app(
             provenance = {"verified_human_creator": False}
 
         audit.log_classification(
-            db_path,
+            db,
             content_id=content_id,
             creator_id=creator_id,
             attribution=result["attribution"],
@@ -141,17 +145,15 @@ def create_app(
         if not isinstance(creator_reasoning, str) or not creator_reasoning.strip():
             return jsonify({"error": "Field 'creator_reasoning' is required and must be a non-empty string."}), 400
 
-        original = audit.latest_for_content(db_path, content_id)
+        # Read-the-original and write-the-appeal happen atomically in one
+        # transaction inside record_appeal; returns None if the content is unknown.
+        original = audit.record_appeal(
+            db,
+            content_id=content_id,
+            appeal_reasoning=creator_reasoning,
+        )
         if original is None:
             return jsonify({"error": f"No content found with id '{content_id}'."}), 404
-
-        audit.log_appeal(
-            db_path,
-            content_id=content_id,
-            creator_id=original.get("creator_id"),
-            appeal_reasoning=creator_reasoning,
-            original=original,
-        )
 
         return (
             jsonify(
@@ -169,7 +171,7 @@ def create_app(
         body = request.get_json(silent=True) or {}
         try:
             certificate = certificates.enroll(
-                db_path,
+                db,
                 body.get("creator_id"),
                 body.get("samples"),
                 pledge_accepted=bool(body.get("pledge_accepted", False)),
@@ -183,7 +185,7 @@ def create_app(
         creator_id = request.args.get("creator_id", type=str)
         if not creator_id:
             return jsonify({"error": "Query param 'creator_id' is required."}), 400
-        cert = certificates.get_certificate(db_path, creator_id)
+        cert = certificates.get_certificate(db, creator_id)
         if cert is None:
             return jsonify({"verified_human_creator": False, "creator_id": creator_id}), 404
         return jsonify(cert), 200
@@ -191,12 +193,12 @@ def create_app(
     @app.get("/log")
     def get_log():
         limit = request.args.get("limit", default=50, type=int)
-        return jsonify({"entries": audit.get_recent(db_path, limit=limit)}), 200
+        return jsonify({"entries": audit.get_recent(db, limit=limit)}), 200
 
     @app.get("/analytics")
     def get_analytics():
         # Aggregate dashboard metrics over the audit log (stretch feature).
-        return jsonify(analytics.compute(db_path)), 200
+        return jsonify(analytics.compute(db)), 200
 
     @app.errorhandler(429)
     def ratelimit_handler(exc):

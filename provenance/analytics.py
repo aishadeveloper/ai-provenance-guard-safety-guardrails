@@ -18,6 +18,7 @@ from collections import Counter
 from typing import Any
 
 from provenance import audit
+from provenance.db import Database
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -65,6 +66,6 @@ def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def compute(db_path: str) -> dict[str, Any]:
-    """Compute dashboard metrics from the audit log at ``db_path``."""
-    return summarize(audit.get_all(db_path))
+def compute(db: Database) -> dict[str, Any]:
+    """Compute dashboard metrics from the audit log."""
+    return summarize(audit.get_all(db))

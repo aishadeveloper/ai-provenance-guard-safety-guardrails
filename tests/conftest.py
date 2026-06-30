@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from provenance.app import create_app
+from provenance.db import Database
 
 
 class FakeGroqClient:
@@ -42,6 +43,12 @@ class FakeGroqClient:
 def db_path(tmp_path):
     """An isolated, throwaway SQLite path for each test."""
     return str(tmp_path / "audit_test.db")
+
+
+@pytest.fixture
+def db(db_path):
+    """A Database handle on the temp path, for data-access unit tests."""
+    return Database(db_path)
 
 
 @pytest.fixture

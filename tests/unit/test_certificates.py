@@ -23,50 +23,50 @@ def _samples():
     return [SAMPLE_A, SAMPLE_B, SAMPLE_C]
 
 
-def test_enroll_grants_credential(db_path):
-    certificates.init_db(db_path)
-    cert = certificates.enroll(db_path, "writer-1", _samples(), pledge_accepted=True)
+def test_enroll_grants_credential(db):
+    certificates.init_db(db)
+    cert = certificates.enroll(db, "writer-1", _samples(), pledge_accepted=True)
     assert cert["credential"] == "Verified Human Creator"
     assert cert["samples_enrolled"] == 3
     assert set(cert["baseline"]) == {"function_words", "punctuation", "burstiness"}
-    assert certificates.is_verified(db_path, "writer-1")
+    assert certificates.is_verified(db, "writer-1")
 
 
-def test_enroll_requires_pledge(db_path):
-    certificates.init_db(db_path)
+def test_enroll_requires_pledge(db):
+    certificates.init_db(db)
     with pytest.raises(certificates.EnrollmentError):
-        certificates.enroll(db_path, "writer-1", _samples(), pledge_accepted=False)
+        certificates.enroll(db, "writer-1", _samples(), pledge_accepted=False)
 
 
-def test_enroll_requires_minimum_samples(db_path):
-    certificates.init_db(db_path)
+def test_enroll_requires_minimum_samples(db):
+    certificates.init_db(db)
     with pytest.raises(certificates.EnrollmentError):
-        certificates.enroll(db_path, "writer-1", [SAMPLE_A, SAMPLE_B], pledge_accepted=True)
+        certificates.enroll(db, "writer-1", [SAMPLE_A, SAMPLE_B], pledge_accepted=True)
 
 
-def test_enroll_rejects_too_short_samples(db_path):
-    certificates.init_db(db_path)
+def test_enroll_rejects_too_short_samples(db):
+    certificates.init_db(db)
     short = ["too short", "also short", "still short"]
     with pytest.raises(certificates.EnrollmentError):
-        certificates.enroll(db_path, "writer-1", short, pledge_accepted=True)
+        certificates.enroll(db, "writer-1", short, pledge_accepted=True)
 
 
-def test_unverified_creator_has_no_certificate(db_path):
-    certificates.init_db(db_path)
-    assert certificates.get_certificate(db_path, "nobody") is None
-    assert certificates.is_verified(db_path, "nobody") is False
+def test_unverified_creator_has_no_certificate(db):
+    certificates.init_db(db)
+    assert certificates.get_certificate(db, "nobody") is None
+    assert certificates.is_verified(db, "nobody") is False
 
 
-def test_reenroll_updates_baseline(db_path):
-    certificates.init_db(db_path)
-    certificates.enroll(db_path, "writer-1", _samples(), pledge_accepted=True)
+def test_reenroll_updates_baseline(db):
+    certificates.init_db(db)
+    certificates.enroll(db, "writer-1", _samples(), pledge_accepted=True)
     cert2 = certificates.enroll(
-        db_path, "writer-1",
+        db, "writer-1",
         [SAMPLE_A + " " + SAMPLE_B, SAMPLE_B + " " + SAMPLE_C, SAMPLE_C + " " + SAMPLE_A],
         pledge_accepted=True,
     )
     assert cert2["samples_enrolled"] == 3
-    assert certificates.count_verified(db_path) == 1  # updated, not duplicated
+    assert certificates.count_verified(db) == 1  # updated, not duplicated
 
 
 def test_baseline_consistency_is_one_for_identical_fingerprint():

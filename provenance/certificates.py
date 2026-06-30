@@ -15,11 +15,11 @@ score how well a later submission matches the creator's established style.
 
 from __future__ import annotations
 
-import sqlite3
 import statistics
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from provenance.db import Database
 from provenance.signals.stylometry import stylometric_members
 
 MIN_SAMPLES = 3
@@ -47,14 +47,8 @@ class EnrollmentError(ValueError):
     """Raised when a verification request is invalid (maps to HTTP 400)."""
 
 
-def _connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db(db_path: str) -> None:
-    with _connect(db_path) as conn:
+def init_db(db: Database) -> None:
+    with db.transaction() as conn:
         conn.executescript(_SCHEMA)
 
 
@@ -65,7 +59,7 @@ def _baseline_from_samples(samples: list[str]) -> dict[str, float]:
 
 
 def enroll(
-    db_path: str,
+    db: Database,
     creator_id: str,
     samples: Any,
     *,
@@ -93,7 +87,7 @@ def enroll(
 
     baseline = _baseline_from_samples(valid)
     verified_at = datetime.now(timezone.utc).isoformat()
-    with _connect(db_path) as conn:
+    with db.transaction() as conn:
         conn.execute(
             """
             INSERT INTO verified_creators (
@@ -121,9 +115,9 @@ def enroll(
     }
 
 
-def get_certificate(db_path: str, creator_id: str) -> Optional[dict[str, Any]]:
+def get_certificate(db: Database, creator_id: str) -> Optional[dict[str, Any]]:
     """Return the stored credential + baseline for a creator, or None."""
-    with _connect(db_path) as conn:
+    with db.connection() as conn:
         row = conn.execute(
             "SELECT * FROM verified_creators WHERE creator_id = ?", (creator_id,)
         ).fetchone()
@@ -143,8 +137,8 @@ def get_certificate(db_path: str, creator_id: str) -> Optional[dict[str, Any]]:
     }
 
 
-def is_verified(db_path: str, creator_id: str) -> bool:
-    return get_certificate(db_path, creator_id) is not None
+def is_verified(db: Database, creator_id: str) -> bool:
+    return get_certificate(db, creator_id) is not None
 
 
 def baseline_consistency(baseline: dict[str, float], members: dict[str, float]) -> float:
@@ -153,6 +147,6 @@ def baseline_consistency(baseline: dict[str, float], members: dict[str, float]) 
     return round(max(0.0, 1.0 - diff), 4)
 
 
-def count_verified(db_path: str) -> int:
-    with _connect(db_path) as conn:
+def count_verified(db: Database) -> int:
+    with db.connection() as conn:
         return conn.execute("SELECT COUNT(*) FROM verified_creators").fetchone()[0]

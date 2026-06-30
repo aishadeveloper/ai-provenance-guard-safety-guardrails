@@ -28,6 +28,7 @@ import math
 import re
 import statistics
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -84,12 +85,15 @@ def _burstiness(text: str) -> Optional[float]:
 
 # --- reference model (Burrows's Delta basis + anchors) ----------------------
 
-@dataclass
+@dataclass(frozen=True)
 class ReferenceModel:
-    fw_mean: list[float]          # per-word mean rate across all reference docs
-    fw_std: list[float]           # per-word std (>=epsilon)
-    fw_human_profile: list[float] # mean z-vector of human docs
-    fw_ai_profile: list[float]    # mean z-vector of AI docs
+    """Immutable reference statistics. ``frozen=True`` + tuple fields mean a built
+    model can't be mutated after construction — safe to share across threads."""
+
+    fw_mean: tuple[float, ...]          # per-word mean rate across all reference docs
+    fw_std: tuple[float, ...]           # per-word std (>=epsilon)
+    fw_human_profile: tuple[float, ...] # mean z-vector of human docs
+    fw_ai_profile: tuple[float, ...]    # mean z-vector of AI docs
     punct_human: float
     punct_ai: float
     burst_human: float
@@ -114,13 +118,13 @@ def build_reference(human_texts: Sequence[str], ai_texts: Sequence[str]) -> Refe
         fw_mean.append(m)
         fw_std.append(s if s > 1e-9 else 1e-9)  # guard constant features
 
-    def class_profile(texts: Sequence[str]) -> list[float]:
+    def class_profile(texts: Sequence[str]) -> tuple[float, ...]:
         zvecs = [_zvector(_function_word_rates(t), fw_mean, fw_std) for t in texts]
-        return [statistics.fmean(col) for col in zip(*zvecs)]
+        return tuple(statistics.fmean(col) for col in zip(*zvecs))
 
     return ReferenceModel(
-        fw_mean=fw_mean,
-        fw_std=fw_std,
+        fw_mean=tuple(fw_mean),
+        fw_std=tuple(fw_std),
         fw_human_profile=class_profile(human_texts),
         fw_ai_profile=class_profile(ai_texts),
         punct_human=statistics.fmean([_punctuation_density(t) for t in human_texts]),
@@ -135,15 +139,18 @@ def _load_corpus(subdir: str) -> list[str]:
     return [p.read_text(encoding="utf-8") for p in sorted(folder.glob("*.txt"))]
 
 
-_DEFAULT_REFERENCE: Optional[ReferenceModel] = None
-
-
+@lru_cache(maxsize=1)
 def default_reference() -> ReferenceModel:
-    """Lazily build (and cache) the reference model from the bundled corpora."""
-    global _DEFAULT_REFERENCE
-    if _DEFAULT_REFERENCE is None:
-        _DEFAULT_REFERENCE = build_reference(_load_corpus("human"), _load_corpus("ai"))
-    return _DEFAULT_REFERENCE
+    """Build the reference model from the bundled corpora, once, on first use.
+
+    ``lru_cache`` replaces a hand-rolled mutable module global: initialization is
+    explicit and the cache is thread-safe. The build is deterministic and the
+    result is immutable (a frozen ``ReferenceModel``), so even if two threads were
+    to race on the very first call the worst case is a harmless recompute — never
+    a torn or shared-mutable value. ``default_reference.cache_clear()`` forces a
+    rebuild if the corpora change.
+    """
+    return build_reference(_load_corpus("human"), _load_corpus("ai"))
 
 
 # --- metric -> sub-score ----------------------------------------------------

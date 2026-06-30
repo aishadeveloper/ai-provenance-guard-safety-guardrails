@@ -79,6 +79,7 @@ image-specific signals (see *Multi-modal support*).
 | Image-metadata signals (multi-modal) | [`provenance/signals/metadata.py`](provenance/signals/metadata.py) |
 | Confidence scoring | [`provenance/scoring.py`](provenance/scoring.py) |
 | Transparency labels | [`provenance/labels.py`](provenance/labels.py) |
+| Database access (connections + transactions) | [`provenance/db.py`](provenance/db.py) |
 | Audit log (SQLite) | [`provenance/audit.py`](provenance/audit.py) |
 | Analytics aggregation | [`provenance/analytics.py`](provenance/analytics.py) |
 | Provenance certificates | [`provenance/certificates.py`](provenance/certificates.py) |
