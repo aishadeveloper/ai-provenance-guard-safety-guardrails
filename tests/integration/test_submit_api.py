@@ -57,10 +57,31 @@ def test_log_is_empty_before_any_submission(client):
     assert client.get("/log").get_json()["entries"] == []
 
 
-def test_ai_stub_drives_attribution(db_path, fake_ai_client):
-    """A high AI-likelihood stub should yield a likely_ai attribution end-to-end."""
+def test_ai_signals_agree_yield_likely_ai(db_path, fake_ai_client):
+    """When both signals point at AI (high LLM stub + AI-styled text), the blended
+    confidence should clear the 0.70 bar and the attribution should be likely_ai."""
     app = create_app(db_path=db_path, llm_client=fake_ai_client, testing=True)
     c = app.test_client()
-    data = c.post("/submit", json={"text": "uniform polished prose", "creator_id": "u2"}).get_json()
+    ai_text = (
+        "Artificial intelligence represents a transformative paradigm shift in modern "
+        "society. It is important to note that the benefits are numerous. Furthermore, "
+        "stakeholders across various sectors must collaborate to ensure responsible "
+        "deployment. Ultimately, a balanced approach is crucial for navigating this landscape."
+    )
+    data = c.post("/submit", json={"text": ai_text, "creator_id": "u2"}).get_json()
     assert data["attribution"] == "likely_ai"
     assert data["confidence"] >= 0.7
+
+
+def test_signal_disagreement_pulls_to_uncertain(db_path, fake_ai_client):
+    """A confident-AI LLM stub on clearly *human-styled* text (signals disagree)
+    should be pulled into the uncertain band rather than reported as confident AI."""
+    app = create_app(db_path=db_path, llm_client=fake_ai_client, testing=True)
+    c = app.test_client()
+    human_text = (
+        "ok so i finally tried that new ramen place downtown and honestly? underwhelming. "
+        "the broth was fine but they put WAY too much sodium in it and i was thirsty for like "
+        "three hours after. probably won't go back unless someone drags me there."
+    )
+    data = c.post("/submit", json={"text": human_text, "creator_id": "u3"}).get_json()
+    assert data["attribution"] == "uncertain"

@@ -9,27 +9,28 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from provenance import labels
+from provenance import labels, scoring
 from provenance.signals.llm import llm_signal
+from provenance.signals.stylometry import stylometric_signal
 
 
 def classify(text: str, *, llm_client: Optional[Any] = None) -> dict[str, Any]:
-    """Run the detection pipeline on ``text`` and return a decision dict.
+    """Run the full detection pipeline on ``text`` and return a decision dict.
 
-    Keys: ``llm_score``, ``stylometric_score``, ``confidence``, ``attribution``,
-    ``label``, plus LLM diagnostics (``verdict``, ``llm_reasoning``,
-    ``llm_error``).
+    Keys: ``llm_score`` (signal 1), ``stylometric_score`` (signal 2),
+    ``confidence`` (blended), ``attribution``, ``label``, plus diagnostics
+    (``verdict``, ``llm_reasoning``, ``llm_error``, ``stylometric_detail``).
 
-    M3 status: confidence is **signal-1-only** — it is exactly the LLM's
-    AI-likelihood. The stylometry signal and the blended score land in M4, at
-    which point ``stylometric_score`` stops being ``None`` and ``confidence``
-    becomes the blend.
+    Both signals run on the raw text; ``scoring.combine`` blends them with a
+    disagreement pull toward uncertainty; the blended score selects the label.
     """
     llm = llm_signal(text, client=llm_client)
     llm_score = llm["ai_likelihood"]
 
-    stylometric_score: Optional[float] = None
-    confidence = llm_score
+    stylo = stylometric_signal(text)
+    stylometric_score = stylo["ai_likelihood"]
+
+    confidence = scoring.combine(llm_score, stylometric_score)
 
     attribution, label = labels.classify_label(confidence)
     return {
@@ -41,4 +42,5 @@ def classify(text: str, *, llm_client: Optional[Any] = None) -> dict[str, Any]:
         "verdict": llm["verdict"],
         "llm_reasoning": llm["reasoning"],
         "llm_error": llm["error"],
+        "stylometric_detail": stylo["detail"],
     }
