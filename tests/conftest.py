@@ -54,6 +54,15 @@ def fake_ai_client():
 
 @pytest.fixture
 def client(db_path, fake_human_client):
-    """A Flask test client wired to a temp DB and a deterministic (human) LLM stub."""
-    app = create_app(db_path=db_path, llm_client=fake_human_client, testing=True)
+    """A Flask test client wired to a temp DB and a deterministic (human) LLM stub.
+
+    Rate limiting is disabled here so functional tests can submit freely; the
+    limiter is exercised on its own in the rate-limit regression test.
+    """
+    app = create_app(
+        db_path=db_path,
+        llm_client=fake_human_client,
+        testing=True,
+        ratelimit_enabled=False,
+    )
     return app.test_client()
