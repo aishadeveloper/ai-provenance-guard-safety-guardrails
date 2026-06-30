@@ -14,6 +14,7 @@ import statistics
 from provenance import labels, scoring
 from provenance.config import ENSEMBLE_WEIGHTS
 from provenance.signals.llm import llm_signal
+from provenance.signals.metadata import metadata_signal
 from provenance.signals.stylometry import stylometric_members
 
 
@@ -51,4 +52,22 @@ def classify(text: str, *, llm_client: Optional[Any] = None) -> dict[str, Any]:
         "verdict": llm["verdict"],
         "llm_reasoning": llm["reasoning"],
         "llm_error": llm["error"],
+    }
+
+
+def classify_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Attribute image *provenance metadata* (the multi-modal stretch path).
+
+    Runs the image-metadata signals through the same ensemble combiner and the same
+    label mapping as text, so the result shape matches: ``confidence``,
+    ``attribution``, ``label``, and a per-signal ``signals`` breakdown.
+    """
+    sig = metadata_signal(metadata)
+    confidence = sig["ai_likelihood"]
+    attribution, label = labels.classify_label(confidence)
+    return {
+        "confidence": confidence,
+        "attribution": attribution,
+        "label": label,
+        "signals": sig["signals"],
     }

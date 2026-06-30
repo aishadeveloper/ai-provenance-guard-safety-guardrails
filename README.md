@@ -27,7 +27,7 @@ Run the test suite:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                    # 84 tests
+python -m pytest -q                    # 97 tests
 ```
 
 ---
@@ -66,13 +66,17 @@ reader-facing label. The full decision — the signal scores, the combined confi
 the attribution, a text snippet, IDs and timestamp — is written to an append-only
 SQLite audit log, and the response returns to the platform. Separately, `/appeal` takes a
 `content_id`, appends an appeal record (flipping the content's current status to
-`under_review`) **next to** the original decision, and confirms receipt.
+`under_review`) **next to** the original decision, and confirms receipt. The same
+`/submit` endpoint also accepts `content_type: "metadata"` for the multi-modal
+image-provenance path, which reuses the ensemble, labels, and audit log with
+image-specific signals (see *Multi-modal support*).
 
 | Component | File |
 |---|---|
 | Config (thresholds, weights, function words, limits) | [`provenance/config.py`](provenance/config.py) |
 | Signal 1 — LLM (Groq) | [`provenance/signals/llm.py`](provenance/signals/llm.py) |
 | Signal 2 — stylometry | [`provenance/signals/stylometry.py`](provenance/signals/stylometry.py) |
+| Image-metadata signals (multi-modal) | [`provenance/signals/metadata.py`](provenance/signals/metadata.py) |
 | Confidence scoring | [`provenance/scoring.py`](provenance/scoring.py) |
 | Transparency labels | [`provenance/labels.py`](provenance/labels.py) |
 | Audit log (SQLite) | [`provenance/audit.py`](provenance/audit.py) |
@@ -85,7 +89,7 @@ SQLite audit log, and the response returns to the platform. Separately, `/appeal
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `POST /submit` | `{text, creator_id}` | `{content_id, attribution, confidence, label, signals, provenance}` |
+| `POST /submit` | `{creator_id, content_type?, text \| metadata}` | `{content_id, content_type, attribution, confidence, label, signals, provenance}` |
 | `POST /appeal` | `{content_id, creator_reasoning}` | `{content_id, status, message}` |
 | `POST /verify` | `{creator_id, samples[], pledge_accepted}` | the `Verified Human Creator` certificate |
 | `GET /certificate` | `?creator_id=…` | stored certificate (404 if not verified) |
@@ -545,6 +549,62 @@ established style" signal, a genuinely different question from "is this AI?".
 
 ---
 
+## Multi-modal support (stretch feature)
+
+The pipeline handles a **second content type beyond text: image provenance
+metadata**. It's attributed through the **same pipeline** — the same
+`scoring.combine_ensemble`, the same three-band labels, the same audit log, the same
+response shape — but with **signals appropriate to images** instead of stylometry.
+The `POST /submit` endpoint gains a `content_type` field (`"text"` default |
+`"metadata"`) and dispatches to the right path.
+
+**How the pipeline handles metadata.** A JSON metadata object (EXIF / C2PA-style) is
+scored by three image signals, each producing a 0–1 AI-likelihood:
+
+| Signal | What it reads | Leans… |
+|---|---|---|
+| `generator_signature` | `software`/`creator_tool`/… naming a known AI generator (Midjourney, DALL·E, Firefly…) or a C2PA `trainedAlgorithmicMedia` tag | **AI** when present |
+| `camera_fingerprint` | richness of camera-hardware EXIF (make, model, lens, exposure, ISO, GPS, timestamp) | **human** when rich |
+| `content_credential` | a C2PA / Content Credentials assertion of AI generation vs camera capture | either, when present |
+
+Weights (`config.METADATA_ENSEMBLE_WEIGHTS`): generator 0.45, content credential 0.30,
+camera 0.25. **Abstention:** a signal with no evidence returns 0.5 and *abstains* —
+only the informative signals vote. Crucially, **absent camera EXIF is treated as
+no-evidence, not AI evidence**, so a metadata-stripped real photo lands *uncertain*
+rather than being wrongly flagged — the same false-positive aversion as the text path.
+
+**Live results** (deterministic — no LLM needed for this modality):
+
+| Metadata input | attribution | confidence | informative signal(s) |
+|---|---|---|---|
+| AI image — `{"software": "Midjourney v6"}` | `likely_ai` | 0.950 | generator 0.95 |
+| Real photo — full Canon EXIF | `likely_human` | 0.120 | camera 0.12 |
+| C2PA `trainedAlgorithmicMedia` credential | `likely_ai` | 0.970 | generator + credential 0.97 |
+| Conflicting — `Stable Diffusion` tag **and** camera EXIF | `uncertain` | 0.595 | generator 0.95 vs camera 0.12 |
+
+The last row shows the ensemble conflict pull working **across modalities**: a
+generator tag and a camera fingerprint disagree, so the system honestly lands
+`uncertain` rather than confidently either way. Metadata decisions are written to the
+audit log with `content_type: "metadata"` (text/stylometry score columns `null`):
+
+```json
+{ "event_type": "classification", "content_type": "metadata",
+  "attribution": "uncertain", "confidence": 0.5947,
+  "llm_score": null, "stylometric_score": null, "status": "classified" }
+```
+
+```bash
+curl -s -X POST http://127.0.0.1:5000/submit -H "Content-Type: application/json" \
+  -d '{"content_type": "metadata", "creator_id": "studio-1",
+       "metadata": {"software": "Midjourney v6", "format": "PNG"}}'
+```
+
+*Trade-off:* the three transparency labels are shared across modalities; the AI
+label's "if you wrote this yourself" phrasing is mildly text-centric for images — a
+noted future refinement rather than building modality-specific label text now.
+
+---
+
 ## Known limitations
 
 1. **Formal / academic human writing (a false positive — the costly direction).**
@@ -612,7 +672,7 @@ established style" signal, a genuinely different question from "is this AI?".
 
 ## Tests
 
-84 tests, clearly delineated by purpose:
+97 tests, clearly delineated by purpose:
 
 | Type | Location | Covers |
 |---|---|---|

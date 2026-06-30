@@ -10,6 +10,7 @@ toggle/override rate limiting. Routes:
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from typing import Any, Optional
@@ -20,7 +21,7 @@ from flask_limiter.util import get_remote_address
 
 from provenance import analytics, audit, certificates
 from provenance.config import DEFAULT_DB_PATH, SUBMIT_RATE_LIMITS
-from provenance.pipeline import classify
+from provenance.pipeline import classify, classify_metadata
 
 
 def create_app(
@@ -59,28 +60,46 @@ def create_app(
     @limiter.limit(submit_limits)
     def submit():
         body = request.get_json(silent=True) or {}
-        text = body.get("text")
         creator_id = body.get("creator_id")
+        content_type = (body.get("content_type") or "text").lower()
 
-        if not isinstance(text, str) or not text.strip():
-            return jsonify({"error": "Field 'text' is required and must be a non-empty string."}), 400
         if not isinstance(creator_id, str) or not creator_id.strip():
             return jsonify({"error": "Field 'creator_id' is required and must be a non-empty string."}), 400
 
-        result = classify(text, llm_client=llm_client)
+        # Dispatch on content type — the same endpoint handles text and the
+        # multi-modal image-metadata path (stretch). Both return the same shape.
+        if content_type == "text":
+            text = body.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return jsonify({"error": "Field 'text' is required and must be a non-empty string."}), 400
+            result = classify(text, llm_client=llm_client)
+            snippet = text
+            llm_score, stylometric_score = result["llm_score"], result["stylometric_score"]
+        elif content_type == "metadata":
+            metadata = body.get("metadata")
+            if not isinstance(metadata, dict) or not metadata:
+                return jsonify({"error": "Field 'metadata' is required and must be a non-empty object."}), 400
+            result = classify_metadata(metadata)
+            snippet = json.dumps(metadata, sort_keys=True)
+            llm_score, stylometric_score = None, None
+        else:
+            return jsonify({"error": f"Unsupported content_type '{content_type}'. Use 'text' or 'metadata'."}), 400
+
         content_id = str(uuid.uuid4())
 
         # Provenance certificate (stretch): a verified creator's content carries a
-        # distinct credential badge, separate from the text's transparency label.
+        # distinct credential badge, separate from the content's transparency label.
         cert = certificates.get_certificate(db_path, creator_id)
         if cert:
-            members = {k: result["signals"][k] for k in ("function_words", "punctuation", "burstiness")}
             provenance = {
                 "verified_human_creator": True,
                 "badge": "✓ Verified Human Creator",
                 "statement": cert["statement"],
-                "baseline_consistency": certificates.baseline_consistency(cert["baseline"], members),
             }
+            # baseline consistency is a stylometric (text) notion only
+            if content_type == "text":
+                members = {k: result["signals"][k] for k in ("function_words", "punctuation", "burstiness")}
+                provenance["baseline_consistency"] = certificates.baseline_consistency(cert["baseline"], members)
         else:
             provenance = {"verified_human_creator": False}
 
@@ -90,19 +109,21 @@ def create_app(
             creator_id=creator_id,
             attribution=result["attribution"],
             confidence=result["confidence"],
-            llm_score=result["llm_score"],
-            stylometric_score=result["stylometric_score"],
-            text_snippet=text,
+            llm_score=llm_score,
+            stylometric_score=stylometric_score,
+            text_snippet=snippet,
+            content_type=content_type,
         )
 
         return (
             jsonify(
                 {
                     "content_id": content_id,
+                    "content_type": content_type,
                     "attribution": result["attribution"],
                     "confidence": round(result["confidence"], 4),
                     "label": result["label"],
-                    "signals": result["signals"],  # per-member ensemble breakdown
+                    "signals": result["signals"],  # per-signal breakdown (modality-specific)
                     "provenance": provenance,       # verified-creator credential
                 }
             ),

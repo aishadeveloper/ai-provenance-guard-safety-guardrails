@@ -62,6 +62,30 @@ FUNCTION_WORDS = [
     "which", "their", "all", "will", "would", "there", "what", "so", "if", "more",
 ]
 
+# --- Multi-modal: image provenance metadata (stretch feature) ---------------
+# A 3-signal ensemble for the image-metadata modality, combined with the SAME
+# scoring.combine_ensemble used for text. See planning.md "Multi-modal support".
+METADATA_ENSEMBLE_WEIGHTS = {
+    "generator_signature": 0.45,  # most direct: metadata names an AI generator
+    "content_credential": 0.30,   # C2PA / Content Credentials assertion
+    "camera_fingerprint": 0.25,   # presence of real-camera EXIF
+}
+
+# Known AI image generators (lowercase substrings matched against metadata values).
+AI_IMAGE_GENERATORS = [
+    "midjourney", "dall-e", "dall·e", "dalle", "stable diffusion", "stablediffusion",
+    "adobe firefly", "firefly", "imagen", "sora", "leonardo.ai", "leonardo ai",
+    "ideogram", "flux", "runway", "nightcafe", "craiyon", "bing image creator",
+    "gemini", "grok", "recraft",
+]
+
+# Camera-hardware EXIF keys whose presence indicates a real photograph.
+CAMERA_EXIF_KEYS = {
+    "make", "model", "lensmodel", "lens", "exposuretime", "fnumber", "iso",
+    "isospeedratings", "focallength", "aperture", "shutterspeed", "gpslatitude",
+    "gpslongitude", "datetimeoriginal",
+}
+
 # Database location for the audit log (overridable via the PROVENANCE_DB env var
 # or the app factory). Gitignored — see .gitignore.
 DEFAULT_DB_PATH = "audit_log.db"

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     event_type        TEXT NOT NULL,          -- 'classification' | 'appeal'
     content_id        TEXT NOT NULL,
+    content_type      TEXT NOT NULL DEFAULT 'text',  -- 'text' | 'metadata'
     creator_id        TEXT,
     timestamp         TEXT NOT NULL,          -- ISO-8601 UTC
     attribution       TEXT,                   -- likely_human | uncertain | likely_ai
@@ -65,6 +66,7 @@ def log_classification(
     stylometric_score: Optional[float],
     text_snippet: Optional[str] = None,
     status: str = "classified",
+    content_type: str = "text",
 ) -> None:
     """Append a classification decision."""
     snippet = (text_snippet or "")[:_SNIPPET_LEN] or None
@@ -72,13 +74,14 @@ def log_classification(
         conn.execute(
             """
             INSERT INTO audit_log (
-                event_type, content_id, creator_id, timestamp, attribution,
-                confidence, llm_score, stylometric_score, status,
+                event_type, content_id, content_type, creator_id, timestamp,
+                attribution, confidence, llm_score, stylometric_score, status,
                 appeal_reasoning, text_snippet
-            ) VALUES ('classification', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            ) VALUES ('classification', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
             """,
             (
                 content_id,
+                content_type,
                 creator_id,
                 _now(),
                 attribution,
@@ -108,13 +111,14 @@ def log_appeal(
         conn.execute(
             """
             INSERT INTO audit_log (
-                event_type, content_id, creator_id, timestamp, attribution,
-                confidence, llm_score, stylometric_score, status,
+                event_type, content_id, content_type, creator_id, timestamp,
+                attribution, confidence, llm_score, stylometric_score, status,
                 appeal_reasoning, text_snippet
-            ) VALUES ('appeal', ?, ?, ?, ?, ?, ?, ?, 'under_review', ?, ?)
+            ) VALUES ('appeal', ?, ?, ?, ?, ?, ?, ?, ?, 'under_review', ?, ?)
             """,
             (
                 content_id,
+                original.get("content_type", "text"),
                 creator_id,
                 _now(),
                 original.get("attribution"),

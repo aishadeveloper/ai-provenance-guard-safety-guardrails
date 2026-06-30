@@ -517,7 +517,60 @@ in its own table (not the content audit log, whose rows are per-content decision
 **Verification:** unit tests (enroll validates sample count/length/pledge, baseline
 is the mean, consistency math, is_verified); integration (`/verify` earns the badge;
 a verified vs unverified `/submit` differ; `/certificate` lookup; 400s). README
-shows a real `/verify` response and a verified-vs-standard `/submit` contrast.
+shows a real `/verify` response and a verified-vs-standard `/submit` contrast. **DONE.**
+
+### Multi-modal support — IN PROGRESS
+
+**Goal:** extend the pipeline to handle a second content type beyond text, returning
+a result, with documented modality-specific signals.
+
+**Second modality: image *provenance metadata*.** Not "more text" — a genuinely
+different content type (structured image metadata), attributed through the **same
+pipeline** (same `combine_ensemble`, same `labels`, same audit log, same response
+shape) but with **signals appropriate to images** instead of stylometry. This shows
+the architecture generalizes rather than being text-only.
+
+**Signals (each → 0–1 AI-likelihood, then ensemble-combined):**
+- **Generator signature** — metadata fields (`software`, `creator_tool`,
+  `digital_source_type`, …) naming a known AI image generator (Midjourney, DALL·E,
+  Stable Diffusion, Firefly, …) or a C2PA `trainedAlgorithmicMedia` tag → strong AI.
+  *Why:* a direct, high-precision provenance signal when present.
+- **Camera fingerprint** — presence/richness of camera-hardware EXIF (make, model,
+  lens, exposure, f-number, ISO, GPS, original timestamp). Real photos carry it;
+  many fields present → leans human. **Absence is treated as no-evidence (the signal
+  abstains), not positive AI evidence** — so a metadata-stripped real photo lands
+  *uncertain* rather than being wrongly flagged AI (consistent with the system's
+  false-positive aversion). *Blind spot:* metadata can be stripped or forged.
+
+**Abstention.** Any signal that finds no evidence returns 0.5 and **abstains**; only
+the informative signals vote in the ensemble. If all three abstain (empty / signal-
+free metadata) the verdict is 0.5 → *uncertain*. The per-signal breakdown still
+reports all three for transparency.
+- **Content credential** — a C2PA / content-credential assertion of AI generation vs
+  camera capture. *Why:* the emerging provenance standard (C2PA / Content
+  Credentials) when present is authoritative.
+
+**Weights:** generator signature 0.45 (most direct), content credential 0.30,
+camera fingerprint 0.25 — in `config.METADATA_ENSEMBLE_WEIGHTS`. Combined with the
+**same** `scoring.combine_ensemble`, so conflicting signals (e.g. an AI generator tag
+*and* camera EXIF) honestly land **uncertain** rather than confidently either way.
+
+**API:** `POST /submit` gains `content_type` (`"text"` default | `"metadata"`); the
+same endpoint dispatches to the right pipeline. Metadata payload is a JSON object.
+Empty / signal-free metadata → all signals 0.5 → `uncertain` (no evidence). Result is
+logged to the audit log with a new `content_type` column (default `text`, so existing
+rows/calls are unaffected).
+
+**Shared labels (a documented trade-off).** The three transparency labels are reused
+across modalities; the AI label's "if you wrote this yourself" phrasing is mildly
+text-centric for images — noted as a future refinement rather than building
+modality-specific label text now.
+
+**Verification:** unit tests (each metadata signal: generator match, camera presence,
+C2PA; combined ordering AI-image-meta > photo-meta; empty → uncertain); integration
+(`/submit content_type=metadata` returns a result and logs with content_type;
+unsupported content_type → 400). README documents the modality + signals with a live
+AI-image-vs-real-photo contrast.
 
 ---
 
