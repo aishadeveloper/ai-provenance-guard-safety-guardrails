@@ -324,32 +324,52 @@ history is preserved. Fields: `event_type`, `content_id`, `creator_id`, `timesta
 `attribution`, `confidence`, `llm_score`, `stylometric_score`, `status`,
 `appeal_reasoning`, `text_snippet`. Surfaced via `GET /log`.
 
-Sample (`GET /log`, 4 entries: three classifications spanning all three bands plus
-one appeal — newest first):
+Sample (verbatim `GET /log` output; 4 entries: three classifications spanning all
+three bands plus one appeal — newest first. Text snippets trimmed for width; every
+entry carries an `attribution`, `confidence`, and `timestamp`):
 
 ```json
-{ "entries": [
-  { "id": 4, "event_type": "classification", "content_id": "b2b59671-…",
-    "creator_id": "creator-carol", "attribution": "uncertain", "confidence": 0.6393,
-    "llm_score": 0.8, "stylometric_score": 0.4301, "status": "classified",
-    "appeal_reasoning": null, "timestamp": "2026-06-30T01:06:37Z" },
-  { "id": 3, "event_type": "appeal", "content_id": "dc40e339-…",
-    "creator_id": "creator-bob", "attribution": "likely_ai", "confidence": 0.8232,
-    "llm_score": 0.8, "stylometric_score": 0.8580, "status": "under_review",
-    "appeal_reasoning": "I wrote this myself from personal experience. English is my second language…" },
-  { "id": 2, "event_type": "classification", "content_id": "dc40e339-…",
-    "creator_id": "creator-bob", "attribution": "likely_ai", "confidence": 0.8232,
-    "llm_score": 0.8, "stylometric_score": 0.8580, "status": "classified",
-    "appeal_reasoning": null },
-  { "id": 1, "event_type": "classification", "content_id": "782eac48-…",
-    "creator_id": "creator-aisha", "attribution": "likely_human", "confidence": 0.1193,
-    "llm_score": 0.1, "stylometric_score": 0.1484, "status": "classified",
-    "appeal_reasoning": null } 
-] }
+{
+  "entries": [
+    {
+      "id": 4, "event_type": "appeal", "content_id": "50f9474c-1a43-4e5b-98a7-e8cbc850258a",
+      "creator_id": "creator-bob", "attribution": "likely_ai", "confidence": 0.8232017394202322,
+      "llm_score": 0.8, "stylometric_score": 0.8580043485505807, "status": "under_review",
+      "appeal_reasoning": "I wrote this myself from personal experience. English is my second language so my style may read more formal than typical.",
+      "text_snippet": "Maintaining a healthy work-life balance is essential for bot…",
+      "timestamp": "2026-06-30T02:08:15Z"
+    },
+    {
+      "id": 3, "event_type": "classification", "content_id": "d14b8107-6462-4db8-b40b-d5c9f0809c0f",
+      "creator_id": "creator-carol", "attribution": "uncertain", "confidence": 0.6393002413298108,
+      "llm_score": 0.8, "stylometric_score": 0.4301243329257401, "status": "classified",
+      "appeal_reasoning": null,
+      "text_snippet": "Artificial intelligence represents a transformative paradigm…",
+      "timestamp": "2026-06-30T02:08:15Z"
+    },
+    {
+      "id": 2, "event_type": "classification", "content_id": "50f9474c-1a43-4e5b-98a7-e8cbc850258a",
+      "creator_id": "creator-bob", "attribution": "likely_ai", "confidence": 0.8232017394202322,
+      "llm_score": 0.8, "stylometric_score": 0.8580043485505807, "status": "classified",
+      "appeal_reasoning": null,
+      "text_snippet": "Maintaining a healthy work-life balance is essential for bot…",
+      "timestamp": "2026-06-30T02:08:14Z"
+    },
+    {
+      "id": 1, "event_type": "classification", "content_id": "e4dee72d-13c7-4412-af55-21df3bf248d9",
+      "creator_id": "creator-aisha", "attribution": "likely_human", "confidence": 0.11934114632372422,
+      "llm_score": 0.1, "stylometric_score": 0.14835286580931056, "status": "classified",
+      "appeal_reasoning": null,
+      "text_snippet": "ok so i finally tried that new ramen place downtown and hone…",
+      "timestamp": "2026-06-30T02:08:13Z"
+    }
+  ]
+}
 ```
 
-Note rows 2 and 3 share `content_id` `dc40e339-…`: the original `classified`
-decision is preserved and the `under_review` appeal sits beside it.
+Note rows 2 and 4 share `content_id` `50f9474c-…`: the original `classified`
+decision (row 2) is preserved and the `under_review` appeal (row 4) sits beside
+it — the append-only log showing the appeal alongside the original classification.
 
 ---
 
